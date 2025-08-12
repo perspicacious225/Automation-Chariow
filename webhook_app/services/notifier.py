@@ -1,6 +1,6 @@
 # from ..config import Config
 from .email import EmailService, to_plain
-# from .whatsapp import WhatsAppService
+from .whatsapp import WhatsAppService
 from webhook_app.templates import messages
 import logging
 from webhook_app.config import Config
