@@ -1,0 +1,80 @@
+{
+  "event": "successful.sale",
+  "sale": {
+    "id": "12345",
+    "amount": {
+      "raw": 4900,
+      "value": 4900,
+      "formatted": "F CFA 4,900",
+      "short": "4.9K",
+      "currency": "XOF"
+    },
+    "original_amount": {
+      "raw": 4900,
+      "value": 4900,
+      "formatted": "F CFA 4,900",
+      "short": "4.9K",
+      "currency": "XOF"
+    },
+    "discount_amount": {
+      "raw": 0,
+      "value": 0,
+      "formatted": "F CFA 0",
+      "short": "0",
+      "currency": "XOF"
+    },
+    "settlement": {
+      "amount": {
+        "raw": 4165,
+        "value": 4165,
+        "formatted": "F CFA 4,165",
+        "short": "4.2K",
+        "currency": "XOF"
+      },
+      "due_at": "2025-08-15T01:28:34.000000Z",
+      "done_at": null,
+      "service_fee": {
+        "raw": 343,
+        "value": 343,
+        "formatted": "F CFA 343",
+        "short": "343",
+        "currency": "XOF"
+      }
+    },
+    "status": "completed",
+    "created_at": "2025-08-12T01:28:08.000000Z",
+    "custom_fields": null,
+    "completed_at": "2025-08-12T01:28:34.000000Z",
+    "abandoned_at": null,
+    "failed_at": null
+  },
+  "product": {
+    "id": "prd_k3eyyy",
+    "name": "Microsoft Office 365 – Licence À Vie - Sans abonnement",
+    "url": "https://digitechhub.store/office-365-a-vie",
+    "price": {
+      "raw": 15000,
+      "value": 15000,
+      "formatted": "F CFA 15,000",
+      "short": "15.0K",
+      "currency": "XOF"
+    }
+  },
+  "customer": {
+    "id": "cus_gcpqw5us",
+    "name": "Marvel Kouadio",
+    "first_name": "Marvel",
+    "last_name": "Kouadio",
+    "email": "yymero0@gmail.com",
+    "phone": "0789333113",
+    "country": "CI"
+  },
+  "store": {
+    "id": "store_4jy5h5ggl4fu",
+    "name": "Digitech Hub",
+    "url": "https://digitechhub.store"
+  },
+  "checkout": {
+    "url": "https://digitechhub.store/prd_k3eyyy/checkout?first_name=Marvel&last_name=Kouadio&email=kouadioparf%40gmail.com&country=CI&phone=0141923030"
+  }
+}

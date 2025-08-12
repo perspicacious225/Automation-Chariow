@@ -1,0 +1,22 @@
+# .gitignore
+*.log
+venv/
+# Fichiers sensibles
+credentials_gmail.json
+token.json
+.env
+
+# fichier test
+test.py
+local_test
+
+# Données locales
+*.sqlite
+logs/
+*.db
+templates/last_webhook.json
+data/
+# Python cache
+__pycache__/
+*.pyc
+
