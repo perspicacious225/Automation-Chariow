@@ -8,7 +8,7 @@ token.json
 
 # fichier test
 test.py
-local_test
+local_tester
 
 # Données locales
 *.sqlite

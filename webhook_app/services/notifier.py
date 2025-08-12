@@ -1,12 +1,14 @@
 # from ..config import Config
-from .email import EmailService
+from .email import EmailService, to_plain
 from .whatsapp import WhatsAppService
 from templates import messages
 import logging
 from config import Config
 from models.sale import Sale
+import re
 
 logger = logging.getLogger(__name__)
+
 class Notifier:
     def __init__(self):
         self.email_service = EmailService()
@@ -27,6 +29,7 @@ class Notifier:
             'sale_id': sale.id,
             'support_email': Config.SENDER_EMAIL
         }
+    
 
     def _send_notification(self, sale: Sale, template_type: str):
         """Méthode privée pour centraliser l'envoi des notifications"""
@@ -35,15 +38,15 @@ class Notifier:
             # WhatsApp
             whatsapp_msg = messages.TEMPLATES_WHATSAPP[template_type].format(**template_vars)
             self.whatsapp_service.send_message(sale.customer_phone, whatsapp_msg)
-
+    
             # Email
             email_body = messages.EMAIL_TEMPLATES[template_type].format(**template_vars)
             self.email_service.send_email(
-                recipient=sale.customer_email,
-                subject=f"🔔 {messages.EMAIL_SUBJECTS[template_type]} {sale.store_name}",
-                body=email_body,
-               
-            )
+            recipient=sale.customer_email,
+            subject=f"🔔 {messages.EMAIL_SUBJECTS[template_type]} {sale.store_name}",
+            html_body=email_body,
+            plain_fallback=to_plain(email_body))
+
 
             logger.info(f"Notifications {template_type} envoyées pour {sale.id}")
             return True
