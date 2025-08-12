@@ -3,9 +3,8 @@ from .email import EmailService, to_plain
 from .whatsapp import WhatsAppService
 from templates import messages
 import logging
-from config import Config
-from models.sale import Sale
-import re
+from webhook_app.config import Config
+from webhook_app.models.sale import Sale
 
 logger = logging.getLogger(__name__)
 

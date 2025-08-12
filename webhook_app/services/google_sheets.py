@@ -1,7 +1,7 @@
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import logging
-from config import Config
+from webhook_app.config import Config
 
 logger = logging.getLogger(__name__)
 

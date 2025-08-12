@@ -2,10 +2,10 @@ from flask import Flask, request, jsonify
 import json, os
 
 from webhook_app.utils.database import Database, sqlite3, ensure_schema_for_webhooks, save_webhook_raw
-from config import Config
-from services.notifier import Notifier
-from services.google_sheets import GoogleSheetsService
-from models.sale import Sale
+from webhook_app.config import Config
+from webhook_app.services.notifier import Notifier
+from webhook_app.services.google_sheets import GoogleSheetsService
+from webhook_app.models.sale import Sale
 # from .services.email import EmailService
 
 import logging
