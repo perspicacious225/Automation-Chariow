@@ -77,7 +77,7 @@ def create_app():
                 return jsonify({"status": "already_processed"}), 200
             
             # Google Sheet
-            google_sheets.append_sale(sale)
+            # google_sheets.append_sale(sale)
             # Gestion des différents statuts
             if sale.status == "abandoned":
                 notifier.handle_abandoned(sale)
