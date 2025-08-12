@@ -4,7 +4,7 @@ import json, os
 from webhook_app.utils.database import Database, sqlite3, ensure_schema_for_webhooks, save_webhook_raw
 from webhook_app.config import Config
 from webhook_app.services.notifier import Notifier
-from webhook_app.services.google_sheets import GoogleSheetsService
+# from webhook_app.services.google_sheets import GoogleSheetsService
 from webhook_app.models.sale import Sale
 # from .services.email import EmailService
 
@@ -20,7 +20,7 @@ def create_app():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
-    google_sheets = GoogleSheetsService()
+    # google_sheets = GoogleSheetsService()
     db = Database()
     ensure_schema_for_webhooks()
 
