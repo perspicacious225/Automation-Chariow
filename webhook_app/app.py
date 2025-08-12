@@ -1,12 +1,11 @@
 from flask import Flask, request, jsonify
 import json, os
 
-from utils.database import ensure_schema_for_webhooks, save_webhook_raw
+from webhook_app.utils.database import Database, sqlite3, ensure_schema_for_webhooks, save_webhook_raw
 from config import Config
 from services.notifier import Notifier
 from services.google_sheets import GoogleSheetsService
 from models.sale import Sale
-from utils.database import Database, sqlite3
 # from .services.email import EmailService
 
 import logging
