@@ -1,12 +1,13 @@
 from flask import Flask, request, jsonify
 import json, os
 
-from webhook_app.utils.database import Database, sqlite3, ensure_schema_for_webhooks, save_webhook_raw
-from webhook_app.config import Config
-from webhook_app.services.notifier import Notifier
 
-from webhook_app.models.sale import Sale
-# from .services.email import EmailService
+from utils.database import Database, sqlite3, ensure_schema_for_webhooks, save_webhook_raw, ensure_schema_for_notifications
+from config import Config
+from services.notifier import Notifier
+
+from models.sale import Sale
+from services.mailer import EmailService
 
 import logging
 
@@ -16,6 +17,12 @@ def create_app():
     app = Flask(__name__)
     CORS(app, resources={r"/webhook": {"origins": "*"}})
     notifier = Notifier()
+    email_service = EmailService()
+    
+        # schémas DB
+    ensure_schema_for_webhooks()
+    ensure_schema_for_notifications()   # +++ AJOUT
+
     # Configuration
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
@@ -27,6 +34,42 @@ def create_app():
     @app.route("/", methods=["GET"])
     def home():
         return jsonify({"status": "running", "message": "Webhook handler is operational"}), 200
+    
+    @app.get("/test-email")
+    def test_email():
+        # on récupère un destinataire: ?to=dest@example.com
+        to = request.args.get("to") or os.getenv("TEST_EMAIL_TO") or os.getenv("SENDER_EMAIL") or os.getenv("SMTP_USER")
+        if not to:
+            return jsonify({"ok": False, "error": "Spécifie ?to=... ou définis TEST_EMAIL_TO"}), 400
+
+        subject = "Test SMTP + IMAP (copie Envoyés) ✅"
+        html = "<h3>Bonjour 👋</h3><p>Test d’envoi via SMTP + copie IMAP dans <b>Envoyés</b>.</p>"
+        text = "Bonjour, test d’envoi via SMTP + copie IMAP dans Envoyés."
+
+        ok = email_service.send_email(recipient=to, subject=subject, html_body=html, plain_fallback=text)
+        return jsonify({"ok": ok, "to": to})
+    
+    import imaplib
+
+    @app.get("/debug-imap")
+    def debug_imap():
+        try:
+            host = os.getenv("IMAP_HOST")
+            port = int(os.getenv("IMAP_PORT", "993"))
+            user = os.getenv("IMAP_USER") or os.getenv("SMTP_USER")
+            pw   = os.getenv("IMAP_PASS") or os.getenv("SMTP_PASS")
+
+            with imaplib.IMAP4_SSL(host, port) as imap:
+                imap.login(user, pw)
+                typ, data = imap.list()
+                rows = []
+                if typ == "OK":
+                    for line in data or []:
+                        rows.append(line.decode("utf-8", "ignore"))
+                imap.logout()
+            return jsonify({"ok": True, "folders": rows})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
 
     @app.route("/webhook", methods=["GET", "POST", "OPTIONS"])  # Ajout OPTIONS pour CORS
     def handle_webhook():

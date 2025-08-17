@@ -6,6 +6,7 @@ class Sale:
     id: str
     status: str
     product_name: str
+    product_id: str
     customer_name: str
     customer_phone: str
     customer_country: str
@@ -25,6 +26,7 @@ class Sale:
             id=sale.get("id"),
             status=sale.get("status"),
             product_name=payload.get("product", {}).get("name"),
+            product_id=payload.get("product", {}).get("id"),
             customer_name=payload.get("customer", {}).get("name"),
             customer_phone=payload.get("customer", {}).get("phone"),
             customer_country=payload.get("customer", {}).get("country"),

@@ -1,7 +1,7 @@
 {
   "event": "successful.sale",
   "sale": {
-    "id": "123dqwdqn45",
+    "id": "5",
     "amount": {
       "raw": 4900,
       "value": 4900,
@@ -49,7 +49,7 @@
     "failed_at": null
   },
   "product": {
-    "id": "prd_k3eyyy",
+    "id": "prd_k3eyyyy",
     "name": "Microsoft Office 365 – Licence À Vie - Sans abonnement",
     "url": "https://digitechhub.store/office-365-a-vie",
     "price": {
@@ -65,7 +65,7 @@
     "name": "Marvel Kouadio",
     "first_name": "Marvel",
     "last_name": "Kouadio",
-    "email": "yymero0@gmail.com",
+    "email": "digitechbusinesses@gmail.com",
     "phone": "0789333113",
     "country": "CI"
   },
