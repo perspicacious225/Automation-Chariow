@@ -2,11 +2,11 @@
 import logging
 import os
 import re
-from models.sale import Sale
-from templates import messages
+from webhook_app.models.sale import Sale
+from webhook_app.templates import messages
 from .mailer import EmailService, to_plain
 from .whatsapp import WhatsAppService
-from utils.database import Database
+from webhook_app.utils.database import Database
 
 import unicodedata
 import re

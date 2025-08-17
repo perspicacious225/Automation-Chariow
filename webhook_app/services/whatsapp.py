@@ -2,7 +2,7 @@ import re
 import requests
 import logging
 from typing import Optional
-from config import Config
+from webhook_app.config import Config
 
 logger = logging.getLogger(__name__)
 

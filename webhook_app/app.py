@@ -2,12 +2,12 @@ from flask import Flask, request, jsonify
 import json, os
 
 
-from utils.database import Database, sqlite3, ensure_schema_for_webhooks, save_webhook_raw, ensure_schema_for_notifications
-from config import Config
-from services.notifier import Notifier
+from webhook_app.utils.database import Database, sqlite3, ensure_schema_for_webhooks, save_webhook_raw, ensure_schema_for_notifications
+from webhook_app.config import Config
+from webhook_app.services.notifier import Notifier
 
-from models.sale import Sale
-from services.mailer import EmailService
+from webhook_app.models.sale import Sale
+from webhook_app.services.mailer import EmailService
 
 import logging
 

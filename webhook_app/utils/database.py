@@ -1,7 +1,7 @@
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from config import Config
+from webhook_app.config import Config
 import logging
 import json
 
