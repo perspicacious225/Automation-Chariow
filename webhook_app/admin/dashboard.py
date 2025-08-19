@@ -13,8 +13,12 @@ def _guard():
     tok = getattr(Config, "DASHBOARD_TOKEN", None)
     if not tok:
         return True
-    supplied = request.headers.get("X-Dashboard-Token") or request.args.get("token")
-    return supplied == tok
+    # Autorise soit l'entête, soit ?token=...
+    return (
+        request.headers.get("X-Dashboard-Token") == tok
+        or request.args.get("token") == tok
+    )
+
 
 def _conn():
     return sqlite3.connect(Config.DB_PATH)
@@ -257,7 +261,16 @@ table{width:100%;border-collapse:collapse;margin-top:8px} th,td{padding:8px;bord
 </div>
 <script>
 async function load(){
-  const m = await (await fetch('/dashboard/metrics.json')).json();
+  // --- NEW: pick up token from URL and/or send as header ---
+  const p = new URLSearchParams(location.search);
+  const token   = p.get('token') || '';
+  const headers = token ? { 'X-Dashboard-Token': token } : {};
+  const qs      = token ? ('?token=' + encodeURIComponent(token)) : '';
+
+  // Use token for the API call (both query string and header, works with either guard)
+  const resp = await fetch('/dashboard/metrics.json' + qs, { headers });
+  const m = await resp.json();
+
   const k = document.getElementById('kpis');
   const pct = (x)=> (x*100).toFixed(1)+'%';
   k.innerHTML = `
@@ -275,8 +288,12 @@ async function load(){
     <div class="card"><div class="muted">24h WhatsApp</div><div class="kpi">${m.sent_24h_whatsapp||0}</div></div>
     <div class="card"><div class="muted">Erreurs 24h</div><div class="kpi ko">${m.errors_24h||0}</div></div>
   `;
+
   const steps = document.getElementById('steps');
-  steps.innerHTML = (m.conversions_by_step_7d||[]).map(r=>`<span class="pill">${r.step}: ${r.conv} (${(r.gmv||0).toFixed(0)})</span>`).join('') || '<div class="muted">Aucune donnée</div>';
+  steps.innerHTML =
+    (m.conversions_by_step_7d||[])
+      .map(r=>`<span class="pill">${r.step}: ${r.conv} (${(r.gmv||0).toFixed(0)})</span>`)
+      .join('') || '<div class="muted">Aucune donnée</div>';
 
   function table(id, rows, cols){
     const t = document.getElementById(id);
@@ -290,5 +307,6 @@ async function load(){
 }
 load();
 </script>
+
 """
     return html
