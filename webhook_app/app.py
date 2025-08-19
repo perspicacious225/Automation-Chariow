@@ -1,43 +1,65 @@
+# webhook_app/app.py
 from flask import Flask, request, jsonify
-import json, os
+from flask_cors import CORS
+import json, os, logging
+from webhook_app.admin.dashboard import dashboard_bp
+from webhook_app.utils.database import (
+    Database, sqlite3,
+    ensure_schema_for_webhooks, save_webhook_raw,
+    ensure_schema_for_notifications, ensure_schema_for_scheduled,
+    ensure_notification_log_columns, ensure_scheduled_contact_columns,
+    ensure_fact_dims_schema, upsert_fact_from_webhook, rfm_recompute
+)
 
 
-from webhook_app.utils.database import Database, sqlite3, ensure_schema_for_webhooks, save_webhook_raw, ensure_schema_for_notifications
 from webhook_app.config import Config
 from webhook_app.services.notifier import Notifier
-
-from webhook_app.models.sale import Sale
+from webhook_app.services.scheduler import start_scheduler
 from webhook_app.services.mailer import EmailService
+from webhook_app.models.sale import Sale
 
-import logging
-
-from flask_cors import CORS 
 
 def create_app():
-    app = Flask(__name__)
-    CORS(app, resources={r"/webhook": {"origins": "*"}})
-    notifier = Notifier()
-    email_service = EmailService()
-    
-        # schémas DB
-    ensure_schema_for_webhooks()
-    ensure_schema_for_notifications()   # +++ AJOUT
-
-    # Configuration
+    # Logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
-    # google_sheets = GoogleSheetsService()
-    db = Database()
-    ensure_schema_for_webhooks()
+    # Flask app
+    app = Flask(__name__)
+    CORS(app, resources={r"/webhook": {"origins": "*"}})
 
+    # Services
+    notifier = Notifier()
+    email_service = EmailService()
+    db = Database()
+
+    # ----- DB schemas / migrations (ordre important) -----
+    ensure_schema_for_scheduled()           # base scheduled_notifications (sans colonnes contact/product)
+    ensure_scheduled_contact_columns()      # ajoute contact_key/product_id + index
+    ensure_schema_for_notifications()       # base notification_log
+    ensure_notification_log_columns()       # ajoute recipient_email/phone/contact_key/product_id + index
+    ensure_schema_for_webhooks()            # archive webhooks
+    ensure_fact_dims_schema()
+
+
+    # ----- Scheduler (un seul démarrage) -----
+    def _send(sale, template_type):
+        # envoie email+whatsapp selon la stratégie
+        return notifier._send_notification(sale, template_type)
+    
+    if not getattr(app, "_scheduler_started", False):
+        start_scheduler(_send)
+        app._scheduler_started = True
+
+
+
+    # ----- Routes -----
     @app.route("/", methods=["GET"])
     def home():
         return jsonify({"status": "running", "message": "Webhook handler is operational"}), 200
-    
+
     @app.get("/test-email")
     def test_email():
-        # on récupère un destinataire: ?to=dest@example.com
         to = request.args.get("to") or os.getenv("TEST_EMAIL_TO") or os.getenv("SENDER_EMAIL") or os.getenv("SMTP_USER")
         if not to:
             return jsonify({"ok": False, "error": "Spécifie ?to=... ou définis TEST_EMAIL_TO"}), 400
@@ -45,10 +67,9 @@ def create_app():
         subject = "Test SMTP + IMAP (copie Envoyés) ✅"
         html = "<h3>Bonjour 👋</h3><p>Test d’envoi via SMTP + copie IMAP dans <b>Envoyés</b>.</p>"
         text = "Bonjour, test d’envoi via SMTP + copie IMAP dans Envoyés."
-
         ok = email_service.send_email(recipient=to, subject=subject, html_body=html, plain_fallback=text)
         return jsonify({"ok": ok, "to": to})
-    
+
     import imaplib
 
     @app.get("/debug-imap")
@@ -71,41 +92,38 @@ def create_app():
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
 
-    @app.route("/webhook", methods=["GET", "POST", "OPTIONS"])  # Ajout OPTIONS pour CORS
+    @app.route("/webhook", methods=["GET", "POST", "OPTIONS"])
     def handle_webhook():
-        # Debug complet
-        # app.logger.info(f"\n=== Headers ===\n{request.headers}")
-        # app.logger.info(f"\n=== Raw Data ===\n{request.get_data(as_text=True)}")
-
         app.logger.info(f"DB_PATH = {Config.DB_PATH}")
         app.logger.info(f"WEBHOOK_DUMP_PATH = {Config.WEBHOOK_DUMP_PATH}")
+
         if request.method == "OPTIONS":
             return jsonify({"status": "ok"}), 200
-        
         if request.method == "GET":
             return jsonify({"error": "Use POST for webhooks"}), 405
-            
+
         try:
-            # Validation basique
             if not request.is_json:
                 app.logger.error("Content-Type must be application/json")
                 return jsonify({"error": "Content-Type must be application/json"}), 400
-                
-            payload = request.get_json(force=True)
-            # app.logger.info(f"\n=== Parsed JSON ===\n{payload}")
-            sale = Sale.from_webhook(payload)
-            
 
-            # 1) ARCHIVE en base (historique complet, idempotent)
+            payload = request.get_json(force=True)
+            sale = Sale.from_webhook(payload)
+
+            # 1) Archive du webhook (idempotent)
             try:
                 event_pk = save_webhook_raw(payload, source="green_api")
                 app.logger.info(f"Webhook archivé (id={event_pk})")
             except Exception as e:
                 app.logger.error(f"Archivage webhook échoué: {e}", exc_info=True)
+            try:
+                upsert_fact_from_webhook(payload)   # alimente fact_sales + dims
+            except Exception as e:
+                app.logger.error(f"ETL fact_sales failed: {e}", exc_info=True)
 
-            # 2) DUMP du DERNIER webhook 
+            # 2) Dump last webhook pour debug
             pretty = json.dumps(payload, indent=2, ensure_ascii=False)
-            dump_path = Config.WEBHOOK_DUMP_PATH  # configuré dans config.py
+            dump_path = Config.WEBHOOK_DUMP_PATH
             try:
                 os.makedirs(os.path.dirname(dump_path) or ".", exist_ok=True)
                 with open(dump_path, "w", encoding="utf-8") as f:
@@ -114,24 +132,26 @@ def create_app():
             except Exception as e:
                 app.logger.error(f"❌ Impossible de sauvegarder payload : {e}")
 
-            
-            if db.has_processed(sale.id):  # Utilise l'instance globale
-                app.logger.info(f"Already Processed: {sale.id}:")
+            # 3) Idempotence par sale_id
+            if db.has_processed(sale.id):
+                app.logger.info(f"Already Processed: {sale.id}")
                 return jsonify({"status": "already_processed"}), 200
-            
-            # Google Sheet
-            # google_sheets.append_sale(sale)
-            # Gestion des différents statuts
+
+            # 4) Router selon statut
             if sale.status == "abandoned":
                 notifier.handle_abandoned(sale)
             elif sale.status == "failed":
                 notifier.handle_failed(sale)
             elif sale.status == "completed":
                 notifier.handle_success(sale)
-            
-            db.mark_processed(sale.id, "success")  # Statut explicite
+            try:
+                rfm_recompute()
+            except Exception as e:
+                app.logger.warning(f"RFM recompute skipped: {e}")
+
+            db.mark_processed(sale.id, "success")
             return jsonify({"status": "success"}), 200
-            
+
         except sqlite3.Error as e:
             logger.error(f"Erreur base de données: {str(e)}", exc_info=True)
             return jsonify({"error": "Database error"}), 500
@@ -141,15 +161,15 @@ def create_app():
         except Exception as e:
             app.logger.error(f"Server error: {str(e)}", exc_info=True)
             return jsonify({"error": "Internal server error"}), 500
+        
 
-    # def _authenticate(request):
-    #     return request.headers.get("X-Secret-Token") == Config.WEBHOOK_SECRET
+    app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
 
     return app
 
-# --- Point d'entrée pour Render et exécution locale ---
+
+# Point d'entrée
 app = create_app()
 
 if __name__ == "__main__":
-    import os
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), use_reloader=False)

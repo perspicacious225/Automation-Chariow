@@ -1,568 +1,349 @@
-    # Templates (simplified)
-TEMPLATES_WHATSAPP = {
-        "success":
-"""
-✅ *Paiement confirmé ! Votre licence Office 365 est prête* ✅
+# webhook_app/templates/messages.py
 
-Bonjour {name},
+# -------------------------------------------
+# Blocs communs réutilisables
+# -------------------------------------------
 
-Félicitations ! Votre paiement de *{amount} FCFA* pour *{product_name}* a bien été reçu.
+Message_commun = """<div style="background:#F3F9FB;border:1px dashed #0078D4;padding:16px;border-radius:6px;margin:20px 0;">
+  <p>Pour accéder dès maintenant à ta licence et aux bonus, voici la marche à suivre :</p>
 
-*📦 Comment accéder à votre licence :*
-1. Allez sur : portal.chariow.com
-2. Entrez votre email : *{customer_email}*
-3. Validez avec le code de vérification (envoyé par email)
+  <p>Clique sur ce lien :
+    <a href="https://portal.chariow.com" style="color:#0078D4;text-decoration:underline;">https://portal.chariow.com</a>
+  </p>
 
-⏱ *Le code arrive généralement immédiatement* - Vérifiez vos spams si besoin.
+  <p>Entre l'email que tu as utilisé pour ton achat : <strong>{customer_email}</strong></p>
 
-*🛠 Besoin d'aide ?*
-Contactez notre support :
-- WhatsApp : Laissez nous un message
-- Email : contact.digitetchub@gmail.com
+  <p>Copie le code que tu recevras par email et colle-le sur le site.<br>
+  Tu auras alors accès instantanément à tes achats.</p>
 
-*🔍 Découvrez aussi :*
-- Pack Formation Excel Avancé : {store_url}/excel-formation
-- Tous nos produits : {store_url}
+  <p>Et n'oublie pas : si tu rencontres la moindre difficulté pour l'installation, je suis là. Réponds simplement à ce message ou contacte-moi sur WhatsApp
+    <a href="https://wa.me/2250789333113" style="color:#0078D4;text-decoration:underline;">wa.me/2250789333113</a>.
+    C'est moi, Yanick, qui t'assisterai personnellement.
+  </p>
 
-Merci pour votre confiance !
-L'équipe {store_name}
+  <p>Bienvenue dans l'aventure pour l'émancipation numérique à vie !<br>
+  À très vite,<br>
+  Yanick Kouame<br>
+  Fondateur, Digitech Hub</p>
+</div>"""
 
-📌 *Référence* : CMD-{sale_id}
-""",
 
-        "failure": 
-"""
-Bonjour {name}, 
+Message_commun_wa = (
+    "📦 Comment accéder à votre licence :\n"
+    "1. Allez sur : portal.chariow.com\n"
+    "2. Entrez votre email : {customer_email}\n"
+    "3. Validez avec le code de vérification (envoyé sur votre mail)\n\n"
+    "⏱ Le code arrive généralement immédiatement - Vérifiez vos spams si besoin.\n"
+)
 
-Oups! Il semble y avoir eu un souci avec votre paiement pour *{product_name}*.
-
-Votre accès à *{product_name}* ({amount}) est bloqué par un paiement interrompu. Causes fréquentes : 
-• Problème réseau 
-• Plafond carte dépassé 
-• Session expirée
-
-Pas de panique, votre panier est sauvegardé.
-
-🛠️ *Solutions rapides :* 
-1. Réessayez avec Wave/Orange Money/carte/MTN MONEY ici :
-{checkout_url} 
-2. Besoin d'aide ? Nous sommes à votre écoute !
-
-💎 *Offre sécurisée :* 
-✅ Licence à vie Office 365 + Windows 11 Pro 
-✅ Guide d'installation 5 min (vidéo incluse) 
-✅ Support WhatsApp illimité 
-✅ Remboursement 24h si insatisfait
-
-⏰ *Offre exclusive valable 24h* (après : {product_value} FCFA)
-
-L'équipe {store_name} vous attend !
-""",
-        "abandon":
-"""
-Bonjour {name},
-
-Nous avons remarqué que votre commande pour *{product_name}* n'a pas pu être finalisée, soit suite à un abandon accidentel, soit à une erreur de paiement.
-
-Pas de panique, votre panier est sauvegadé.
-
-Ne passez pas à côté de :
-✅ Offre exclusive : {amount} FCFA au lieu de {product_value} FCFA
-✅ Licence à vie 100% légale
-✅ Installation facile en 5 min (vidéo incluse)
-✅ Garantie satisfait ou remboursé 24h
-
-🔗 Reprenez votre paiement ici : 
-{checkout_url} 
-
-⏰ *Offre valable 24h seulement !* 
-
-Un problème ? Nous sommes à votre écoute ! 
-Laissez-nous un message ici.
-
-À tout de suite, 
-— L'équipe {store_name}
-"""
-    }
-
-EMAIL_TEMPLATES = {
-    "success": """
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{
-            font-family: 'Segoe UI', Arial, sans-serif;
-            line-height: 1.6;
-            color: #2d2d2d;
-            max-width: 650px;
-            margin: 0 auto;
-            padding: 0;
-            background-color: #f5f5f5;
-        }}
-        .header {{
-            background: linear-gradient(135deg, #107C10 0%, #004B1C 100%);
-            color: white;
-            padding: 30px 20px;
-            text-align: center;
-            border-radius: 8px 8px 0 0;
-        }}
-        .container {{
-            background: white;
-            padding: 0;
-            border-radius: 0 0 8px 8px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-        }}
-        .content {{
-            padding: 25px;
-        }}
-        .success-badge {{
-            background-color: #E6F3D7;
-            color: #107C10;
-            padding: 15px;
-            border-radius: 6px;
-            margin: 20px 0;
-            text-align: center;
-            font-weight: bold;
-        }}
-        .access-card {{
-            background-color: #F3F9FB;
-            border: 1px dashed #0078D4;
-            padding: 20px;
-            margin: 25px 0;
-            border-radius: 6px;
-        }}
-        .button {{
-            background: linear-gradient(135deg, #107C10 0%, #004B1C 100%);
-            color: white;
-            padding: 14px 30px;
-            text-decoration: none;
-            border-radius: 6px;
-            display: inline-block;
-            font-weight: bold;
-            font-size: 16px;
-            margin: 15px 0;
-            text-align: center;
-        }}
-        .whatsapp-badge {{
-            display: inline-block;
-            background-color: #25D366;
-            color: white;
-            padding: 8px 15px;
-            border-radius: 20px;
-            margin: 10px 0;
-            font-size: 14px;
-        }}
-        .product-grid {{
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin: 20px 0;
-        }}
-        .product-card {{
-            border: 1px solid #E1E1E1;
-            border-radius: 6px;
-            padding: 10px;
-            text-align: center;
-            font-size: 13px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>✅ Paiement confirmé ! Votre commande est prête</h1>
-        </div>
-        
-        <div class="content">
-            <p>Bonjour {name},</p>
-            
-            <div class="success-badge">
-                Merci pour votre achat de {product_name} pour {amount} FCFA
-            </div>
-            
-            <div class="access-card">
-                <h3 style="margin-top: 0;">📦 Accédez à votre licence</h3>
-                <p>Pour récupérer votre produit :</p>
-                <ol>
-                    <li>Allez sur <a href="https://portal.chariow.com" target="_blank">portal.chariow.com</a></li>
-                    <li>Entrez votre adresse email <strong>{customer_email}</strong></li>
-                    <li>Validez avec le code de vérification envoyé à cet email</li>
-                </ol>
-                
-                <center>
-                    <a href="https://portal.chariow.com" class="button">Accéder au portail maintenant</a>
-                </center>
-                
-                <p style="font-size: 13px; color: #666;">
-                    <em>Le code de vérification arrive généralement immédiatement.</em>
-                </p>
-            </div>
-            
-            <h3>Besoin d'aide ?</h3>
-            <p>Notre équipe est disponible sur :</p>
-            <div class="whatsapp-badge">
-                Cliquez sur <a href="wa.me/2250576654850">WhatsApp</a>
-            </div>
-            
-            <h3>Découvrez aussi :</h3>
-            <div class="product-grid">
-                <div class="product-card">
-                    <strong>Windows 11 Pro</strong><br>
-                    Licence à vie - 7 000 FCFA
-                </div>
-                <div class="product-card">
-                    <strong>Formation Excel</strong><br>
-                    Pack complet - 10 000 FCFA
-                </div>
-            </div>
-            
-            <p style="text-align: center; margin-top: 25px;">
-                <a href="{store_url}" style="color: #0078D4;">👉 Voir tous nos produits</a>
-            </p>
-        </div>
-        
-        <div class="footer">
-            <p>{store_name} © {current_year} | <a href="{store_url}" style="color: #0078D4;">Notre boutique</a></p>
-            <p style="font-size: 11px;">Référence de commande : {sale_id}</p>
-        </div>
-    </div>
-</body>
-</html>
-    """,
-    "failure": """
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{
-            font-family: 'Segoe UI', Arial, sans-serif;
-            line-height: 1.6;
-            color: #2d2d2d;
-            max-width: 650px;
-            margin: 0 auto;
-            padding: 0;
-            background-color: #f5f5f5;
-        }}
-        .header {{
-            background: linear-gradient(135deg, #D83B01 0%, #A80000 100%);
-            color: white;
-            padding: 30px 20px;
-            text-align: center;
-        }}
-        .container {{
-            background: white;
-            padding: 0;
-            border-radius: 0 0 8px 8px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-        }}
-        .content {{
-            padding: 25px;
-        }}
-        .alert-banner {{
-            background-color: #FEF0F1;
-            border-left: 4px solid #A80000;
-            padding: 15px;
-            margin: 20px 0;
-        }}
-        .solution-card {{
-            background-color: #F3F9FB;
-            border-left: 4px solid #0078D4;
-            padding: 15px;
-            margin: 20px 0;
-        }}
-        .button {{
-            background: linear-gradient(135deg, #D83B01 0%, #A80000 100%);
-            color: white;
-            padding: 14px 30px;
-            text-decoration: none;
-            border-radius: 6px;
-            display: inline-block;
-            font-weight: bold;
-            font-size: 16px;
-            margin: 15px 0;
-            text-align: center;
-        }}
-        .payment-methods {{
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin: 20px 0;
-            flex-wrap: wrap;
-        }}
-        .payment-method {{
-            background: #F3F2F1;
-            padding: 10px 15px;
-            border-radius: 4px;
-            font-size: 14px;
-        }}
-        .step {{
-            display: flex;
-            margin-bottom: 15px;
-            align-items: flex-start;
-        }}
-        .step-number {{
-            background-color: #0078D4;
-            color: white;
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            margin-right: 10px;
-            flex-shrink: 0;
-            font-size: 14px;
-        }}
-        .guarantee-badge {{
-            display: inline-block;
-            background: #E6F3D7;
-            color: #107C10;
-            padding: 8px 15px;
-            border-radius: 4px;
-            margin: 10px 0;
-            font-size: 14px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Action requise : Votre paiement a échoué</h1>
-        </div>
-        
-        <div class="content">
-            <p>Bonjour {name},</p>
-            
-            <div class="alert-banner">
-                ❗ <strong>Nous avons détecté un problème</strong> avec votre paiement pour Microsoft Office 365 à vie.
-            </div>
-            
-            <h3>3 solutions simples pour finaliser votre achat :</h3>
-            
-            <div class="step">
-                <div class="step-number">1</div>
-                <div>
-                    <strong>Réessayer avec la même carte</strong><br>
-                    L'erreur peut être temporaire. Cliquez simplement ci-dessous :
-                </div>
-            </div>
-            
-            <center>
-                <a href="{checkout_url}" class="button" style="color: white;">⟳ Réessayer le paiement</a>
-            </center>
-            
-            <div class="step">
-                <div class="step-number">2</div>
-                <div>
-                    <strong>Changer de mode de paiement</strong><br>
-                    Essayez avec l'un de ces moyens alternatifs :
-                </div>
-            </div>
-            
-            <div class="payment-methods">
-                <span class="payment-method">Wave</span>
-                <span class="payment-method">Orange Money</span>
-                <span class="payment-method">Airtel Money</span>
-                <span class="payment-method">Carte bancaire ...</span>
-            </div>
-            
-            <div class="step">
-                <div class="step-number">3</div>
-                <div>
-                    <strong>Contacter notre support</strong><br>
-                    Cliquez sur : <a href="wa.me/2250576654850">WhatsApp</a><br>
-                    Email: {support_email}
-                </div>
-            </div>
-            
-            <div class="solution-card">
-                <h3 style="margin-top: 0;">Pourquoi ça arrive ?</h3>
-                <ul>
-                    <li>Problème technique temporaire</li>
-                    <li>Fonds insuffisants sur le compte</li>
-                    <li>Limite de transaction...</li>
-                </ul>
-            </div>
-            
-            <div class="guarantee-badge">
-                ⏳ Votre commande est réservée pour 4h - Prix garanti : {amount} FCFA
-            </div>
-            
-            <p><strong>Vos avantages préservés :</strong></p>
-            <ul>
-                <li>Licence à vie officielle Microsoft Office 365</li>
-                <li>Licence à vie officielle Windows 10 & 11 pro</li>
-                <li>Tutoriel d'installation en 5 min</li>
-                <li>Support personnalisé jusqu'à activation</li>
-            </ul>
-        </div>
-        <center>
-                <a href="{checkout_url}" class="button" style="color: white;">⟳ Réessayer le paiement maintenant</a>
-        </center>
-        
-        <div class="footer">
-            <p>{store_name} © {current_year} | <a href="{store_url}" style="color: #0078D4;">Notre boutique</a></p>
-        </div>
-    </div>
-</body>
-</html>
-    """,
-    "abandon": """
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{
-            font-family: 'Segoe UI', Arial, sans-serif;
-            line-height: 1.6;
-            color: #2d2d2d;
-            max-width: 650px;
-            margin: 0 auto;
-            padding: 0;
-            background-color: #f5f5f5;
-        }}
-        .header {{
-            background: linear-gradient(135deg, #0078D4 0%, #004E8C 100%);
-            color: white;
-            padding: 30px 20px;
-            text-align: center;
-        }}
-        .container {{
-            background: white;
-            padding: 0;
-            border-radius: 0 0 8px 8px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-        }}
-        .content {{
-            padding: 25px;
-        }}
-        .urgency-banner {{
-            background-color: #FFF4E5;
-            border-left: 4px solid #FF8C00;
-            padding: 15px;
-            margin: 20px 0;
-            font-size: 15px;
-        }}
-        .button {{
-            background: linear-gradient(135deg, #FF8C00 0%, #F7630C 100%);
-            color: white;
-            padding: 14px 30px;
-            text-decoration: none;
-            border-radius: 6px;
-            display: inline-block;
-            font-weight: bold;
-            font-size: 16px;
-            margin: 15px 0;
-            text-align: center;
-        }}
-        .benefit-item {{
-            margin-bottom: 12px;
-            padding-left: 25px;
-            position: relative;
-        }}
-        .benefit-item:before {{
-            content: "✓";
-            color: #107C10;
-            font-weight: bold;
-            position: absolute;
-            left: 0;
-        }}
-        .warning-item {{
-            margin-bottom: 12px;
-            padding-left: 25px;
-            position: relative;
-            color: #A80000;
-        }}
-        .warning-item:before {{
-            content: "!";
-            color: #A80000;
-            font-weight: bold;
-            position: absolute;
-            left: 0;
-        }}
-        .price-comparison {{
-            display: flex;
-            justify-content: center;
-            margin: 25px 0;
-        }}
-        .old-price {{
-            text-decoration: line-through;
-            color: #666;
-            margin-right: 15px;
-        }}
-        .new-price {{
-            font-weight: bold;
-            color: #A80000;
-            font-size: 1.2em;
-        }}
-        .footer {{
-            background-color: #F3F2F1;
-            padding: 20px;
-            text-align: center;
-            font-size: 12px;
-            color: #666;
-            border-radius: 0 0 8px 8px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Votre licence Office 365 à vie vous attend !</h1>
-        </div>
-        
-        <div class="content">
-            <p>Bonjour {name},</p>
-            
-            <div class="urgency-banner">
-                ⏳ <strong>DERNIÈRE CHANCE</strong> - Votre offre spéciale expire dans 4 heures
-            </div>
-            
-            <p>Votre commande pour <strong>Microsoft Office 365 à vie</strong> n'a pas pu être finalisée. Pas de panique ! Voici comment compléter votre achat en 2 minutes :</p>
-            
-            <ul>
-                <h3>Ce que vous risquez à ne pas terminer :</h3>
-                <li><div class="warning-item">Bloquer vos fichiers au pire moment</div></li>
-                <li><div class="warning-item">Continuer à payer des abonnements mensuels</div></li>
-                <li><div class="warning-item">Vous exposer aux logiciels piratés et virus</div></li>
-            </ul>
-            
-            <div class="price-comparison">
-                <span class="old-price">{product_value} FCFA</span>
-                <span class="new-price">{amount} FCFA (-70%)</span>
-            </div>
-            
-            <center>
-                <a href="{checkout_url}" class="button">👉 Finaliser ma commande maintenant</a>
-            </center>
-            
-            <ul>
-                <h3>Vos avantages exclusifs :</h3>
-                <li><div class="benefit-item">Licence à vie 100% légale pour Office 365 + Windows 11 Pro</div></li>
-                <li><div class="benefit-item">Guide d'installation pas-à-pas en vidéo (5 min)</div></li>
-                <li><div class="benefit-item">Support WhatsApp/e-mail jusqu'à activation</div></li>
-                <li><div class="benefit-item">Garantie satisfait ou remboursé 48h</div></li>
-            </ul>
-            
-            <p style="font-size: 14px; color: #666; margin-top: 30px;">
-                <strong>Modes de paiement acceptés :</strong> Wave, Orange Money, Airtel Money, cartes bancaires...<br>
-                <strong>Support :</strong> Cliquez sur <a href="wa.me/2250576654850">WhatsApp </a> ou réponse à cet e-mail
-            </p>
-        </div>
-        
-        <div class="footer">
-            <p>{store_name} © {current_year} | <a href="{store_url}" style="color: #0078D4;">Notre boutique</a></p>
-            <p style="font-size: 11px;">Cette offre est réservée exclusivement à {name} et expire dans 4h </p>
-        </div>
-    </div>
-</body>
-</html>
-    """
-}
+# -------------------------------------------
+# Sujets d'e-mail
+# -------------------------------------------
 
 EMAIL_SUBJECTS = {
-"success": "Confirmation de commande -",
-"failure": "Paiement échoué -",
-"abandon": "Votre panier vous attend -"
+    # Événements directs
+    "success": "Confirmation de commande -",
+    "failure": "Paiement échoué -",
+    "abandon": "Votre panier vous attend -",
+
+    # Relances
+    "relance_t30":  "Un souci avec ta commande Microsoft 365 ?",
+    "relance_t6h":  "{customer_first_name}, est-ce que {price_current_fmt} pour Microsoft 365 à vie, c'est trop beau pour être vrai ?",
+    "relance_t23h": "Plus que quelques heures : ton accès à vie à Microsoft 365 pour {price_current_fmt}",
+    "relance_t47h": "Fermeture définitive de l'offre Microsoft 365 à {price_current_fmt} ce soir",
+
+    # Confirmations 3.1 → 3.5
+    "confirm_3_1": "Félicitations ! Voici tes accès à Microsoft 365 à vie.",
+    "confirm_3_2": "C'est bon ! Ta licence Microsoft 365 est activée.",
+    "confirm_3_3": "Tu as fait le bon choix. Bienvenue chez Digitech Hub !",
+    "confirm_3_4": "Juste à temps ! Tes accès Microsoft 365 sont ici.",
+    "confirm_3_5": "Ouf ! Bienvenue. Ta licence Microsoft 365 est confirmée.",
+}
+
+# -------------------------------------------
+# Templates e-mail (HTML)
+# NB: doubles accolades {{ }} à l'intérieur du CSS pour éviter .format()
+# -------------------------------------------
+
+EMAIL_TEMPLATES = {
+
+    # Relances e-mail (plain text pour simplicité — tu peux garder HTML si tu préfères)
+    "relance_t30": """<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;line-height:1.6;color:#2d2d2d;background:#f5f5f5;margin:0;">
+  <div style="background:#fff;max-width:650px;margin:0 auto;box-shadow:0 3px 10px rgba(0,0,0,0.1);border-radius:8px;">
+    <div style="color:#fff;text-align:center;padding:30px 20px;border-radius:8px 8px 0 0;background:linear-gradient(135deg,#0078D4 0%,#004E8C 100%);">
+      <h1 style="margin:0;font-size:22px;">Un souci avec ta commande Microsoft 365&nbsp;?</h1>
+    </div>
+    <div style="padding:25px;">
+      <p>Salut {customer_first_name},</p>
+
+      <p>Je suis Yanick, le fondateur de Digitech Hub.</p>
+
+      <p>J'ai vu que tu avais commencé à commander ta licence Microsoft 365 à vie il y a quelques minutes, mais que tu n'as pas pu aller jusqu'au bout.</p>
+
+      <p>Je voulais juste m'assurer que tout allait bien de ton côté.</p>
+
+      <p>Souvent, c'est juste un petit caprice du réseau ou un souci avec le paiement Mobile Money qui bloque au dernier moment. Ça arrive, pas de panique&nbsp;!</p>
+
+      <p>Pour t'éviter de tout recommencer, j'ai mis ta commande de côté. Tu peux la retrouver et finaliser ton achat en cliquant sur le lien ci-dessous&nbsp;:</p>
+
+      <p style="text-align:center;margin:16px 0 24px;">
+        👉 <a href="{checkout_url}" style="color:#0078D4;text-decoration:underline;word-break:break-all;">Clique ici pour finaliser ma commande et activer ma licence</a>
+      </p>
+
+      <p>Si tu as la moindre question ou si ça coince quelque part, réponds simplement à cet email. C'est moi qui lis et qui réponds, et je suis là pour t'aider. L'idée est de te libérer des contraintes, pas d'en ajouter. 😉</p>
+
+      <p>À tout de suite,</p>
+
+      <p style="margin:0;">Yanick Kouame<br>Fondateur, Digitech Hub</p>
+    </div>
+    <div style="background:#F3F2F1;padding:20px;text-align:center;font-size:12px;color:#666;border-radius:0 0 8px 8px;">
+      <p style="margin:0;">{store_name} © {current_year} | <a href="{store_url}" style="color:#0078D4;">Notre boutique</a></p>
+    </div>
+  </div>
+</body></html>""",
+
+    "relance_t6h": """<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;line-height:1.6;color:#2d2d2d;background:#f5f5f5;margin:0;">
+  <div style="background:#fff;max-width:650px;margin:0 auto;box-shadow:0 3px 10px rgba(0,0,0,0.1);border-radius:8px;">
+    <div style="color:#fff;text-align:center;padding:30px 20px;border-radius:8px 8px 0 0;background:linear-gradient(135deg,#0078D4 0%,#004E8C 100%);">
+      <h1 style="margin:0;font-size:22px;">Des questions sur l’offre {price_current_fmt}&nbsp;?</h1>
+    </div>
+    <div style="padding:25px;">
+      <p>Salut {customer_first_name},</p>
+
+      <p>Je reviens vers toi concernant <strong>{product_name}</strong> que tu as mise de côté tout à l'heure.</p>
+
+      <p>Honnêtement, je comprends l'hésitation. Une offre aussi directe, ça peut soulever des questions. <strong>"Un accès à vie pour le prix d'un mois d'abonnement, est-ce que c'est sérieux&nbsp;?"</strong></p>
+
+      <p>Laisse-moi te dire pourquoi j'ai créé Digitech Hub. En Afrique, j'ai vu trop de projets brillants ralentis ou bloqués par des barrières numériques. Un abonnement qui expire au mauvais moment, le danger d'un logiciel piraté... Chaque obstacle est une opportunité perdue.</p>
+
+      <p>Ma mission, c'est de casser ces chaînes. De te donner accès à l'outil numéro 1 dans le monde, sans t'étrangler avec des paiements récurrents. C'est ça, l’émancipation numérique à vie, sans abonnement.</p>
+
+      <p>Et cette mission, plus de 320 entrepreneurs, PME et secrétaires de Côte d’ivoire, du Sénégal ou encore du Cameroun l'ont déjà rejointe.</p>
+
+      <p>Mais la meilleure garantie que je puisse t'offrir, c'est celle-ci&nbsp;:</p>
+
+      <p>Quand tu achètes chez Digitech Hub, c’est moi, Yanick Kouame, qui t’assiste personnellement sur WhatsApp ou en appel vidéo Google Meet. Pas un robot, pas un centre d’appel lointain. Un humain qui comprend ton quotidien et qui reste disponible jusqu’à ce que ta licence soit activée sur tes 5 appareils.</p>
+
+      <p>Ton panier est toujours réservé. Il contient&nbsp;:</p>
+
+      <p style="margin:12px 0 0 0;">✅ Un accès à vie à toute la suite Microsoft 365 (Word, Excel, etc.)<br>
+      ✅ Une licence 100% légale pour 5 PC Windows ou MacBook<br>
+      ✅ Mon assistance personnelle jusqu'à l'activation complète<br>
+      ✅ En bonus : La formation vidéo complète pour maîtriser Office</p>
+
+      <p>Ne laisse pas un doute te priver de cette tranquillité.</p>
+
+      <p style="text-align:center;margin:16px 0 24px;">
+        👉 <a href="{checkout_url}" style="color:#0078D4;text-decoration:underline;word-break:break-all;">Oui, je saisis ma licence à vie avec l'assistance de Yanick</a>
+      </p>
+
+      <p>Passe une excellente journée,</p>
+
+      <p style="margin:0;">Yanick Kouame<br>Fondateur, Digitech Hub</p>
+    </div>
+    <div style="background:#F3F2F1;padding:20px;text-align:center;font-size:12px;color:#666;border-radius:0 0 8px 8px;">
+      <p style="margin:0;">{store_name} © {current_year} | <a href="{store_url}" style="color:#0078D4;">Notre boutique</a></p>
+    </div>
+  </div>
+</body></html>""",
+
+    "relance_t23h": """<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;line-height:1.6;color:#2d2d2d;background:#f5f5f5;margin:0;">
+  <div style="background:#fff;max-width:650px;margin:0 auto;box-shadow:0 3px 10px rgba(0,0,0,0.1);border-radius:8px;">
+    <div style="color:#fff;text-align:center;padding:30px 20px;border-radius:8px 8px 0 0;background:linear-gradient(135deg,#FF8C00 0%,#F7630C 100%);">
+      <h1 style="margin:0;font-size:22px;">Dernières heures pour l’offre à {price_current_fmt}</h1>
+    </div>
+    <div style="padding:25px;">
+      <p>Salut {customer_first_name},</p>
+
+      <p>Ceci est le dernier rappel avant la fin de l'offre.</p>
+
+      <p>Dans quelques heures, l'opportunité d'obtenir la licence Microsoft 365 + Windows 11 Pro à vie pour {price_current_fmt} disparaît. Le tarif repassera définitivement à {price_after_fmt}.</p>
+
+      <p>Très simplement, voici le choix qui se présente à toi aujourd'hui&nbsp;:</p>
+
+      <p><strong>Option 1</strong> : Laisser passer l'offre.<br>
+      Tu continues comme avant, avec le stress des rappels d'abonnement, les documents qui se bloquent au pire moment et les risques des logiciels non officiels.</p>
+
+      <p><strong>Option 2</strong> : Saisir l'opportunité.<br>
+      Tu investis une seule fois {price_current_fmt} et tu obtiens la tranquillité numérique à vie. Word, Excel, PowerPoint, etc., toujours à jour et 100% fonctionnels sur tes 10 appareils.</p>
+
+      <p>Ce que tu es sur le point de manquer n'est pas juste une promotion, c'est&nbsp;:</p>
+
+      <p>Une économie immédiate de {price_after_fmt} - {price_current_fmt}.<br>
+      La fin DÉFINITIVE des frais d'abonnement.<br>
+      Mon assistance personnelle et directe pour tout installer sans souci.</p>
+
+      <p>La balle est dans ton camp. C'est le moment ou jamais de t'émanciper de la contrainte des abonnements.</p>
+
+      <p>Ton panier initial a été conservé et l'offre y est toujours appliquée, mais plus pour longtemps.</p>
+
+      <p style="text-align:center;margin:16px 0 24px;">
+        👉 <a href="{checkout_url}" style="color:#0078D4;text-decoration:underline;word-break:break-all;">Je sécurise mon accès à vie avant la fin (dernier rappel)a>
+      </p>
+
+      <p>Yanick Kouame<br>Fondateur, Digitech Hub</p>
+    </div>
+    <div style="background:#F3F2F1;padding:20px;text-align:center;font-size:12px;color:#666;border-radius:0 0 8px 8px;">
+      <p style="margin:0;">{store_name} © {current_year} | <a href="{store_url}" style="color:#0078D4;">Notre boutique</a></p>
+    </div>
+  </div>
+</body></html>""",
+
+    "relance_t47h": """<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;line-height:1.6;color:#2d2d2d;background:#f5f5f5;margin:0;">
+  <div style="background:#fff;max-width:650px;margin:0 auto;box-shadow:0 3px 10px rgba(0,0,0,0.1);border-radius:8px;">
+    <div style="color:#fff;text-align:center;padding:30px 20px;border-radius:8px 8px 0 0;background:linear-gradient(135deg,#D83B01 0%,#A80000 100%);">
+      <h1 style="margin:0;font-size:22px;">Clôture définitive ce soir</h1>
+    </div>
+    <div style="padding:25px;">
+      <p>Salut {customer_first_name},</p>
+
+      <p>Je te contacte une toute dernière fois au sujet de la licence Microsoft 365 à vie.</p>
+
+      <p>Hier soir, au moment où l'offre devait expirer, j'ai reçu plusieurs messages de personnes ayant eu des soucis de paiement. Pour que tout le monde ait une chance équitable, j'ai exceptionnellement prolongé l'offre de 24 heures.</p>
+
+      <p>Cette prolongation se termine ce soir, à minuit.</p>
+
+      <p>Passé ce délai, la page de l'offre au tarif de <strong>{price_current_fmt}</strong> sera définitivement désactivée.</p>
+
+      <p>Pour résumer de la façon la plus simple possible, voici ce que tu obtiens si tu agis maintenant&nbsp;:</p>
+
+      <p>Un produit essentiel : La suite Microsoft complète (Word, Excel, etc.) + Windows 11 Pro.<br>
+      Un prix imbattable : <strong>{price_current_fmt}</strong>, payé une seule fois.<br>
+      Une valeur à vie : Fini les abonnements, pour toujours.<br>
+      Une garantie humaine : Mon aide personnelle et directe pour que tout fonctionne.</p>
+
+      <p>Il n'y aura pas d'autre prolongation ni d'autre rappel.</p>
+
+      <p>Si l'idée de t'émanciper des abonnements pour de bon te parle, c'est maintenant.</p>
+
+      <p style="text-align:center;margin:16px 0 24px;">
+        👉 <a href="{checkout_url}" style="color:#0078D4;text-decoration:underline;word-break:break-all;">Je réclame mon accès à vie avant la fermeture définitive</a>
+      </p>
+
+      <p>Yanick Kouame<br>Fondateur, Digitech Hub</p>
+    </div>
+    <div style="background:#F3F2F1;padding:20px;text-align:center;font-size:12px;color:#666;border-radius:0 0 8px 8px;">
+      <p style="margin:0;">{store_name} © {current_year} | <a href="{store_url}" style="color:#0078D4;">Notre boutique</a></p>
+    </div>
+  </div>
+</body></html>""",
+
+    # Confirmations selon parcours (3.1 → 3.5)
+    "confirm_3_1": """Salut {customer_first_name},
+Félicitations et bienvenue dans la famille Digitech Hub !
+Tu as fait le meilleur choix pour ta tranquillité et ta productivité. Fini le stress des abonnements mensuels, à toi la liberté numérique à vie !
+
+{Message_commun}""",
+
+    "confirm_3_2": """Salut {customer_first_name},
+Super ! Je suis content de voir que tu as pu finaliser ta commande. Parfois, la technique fait des siennes, mais l'important est que tu y sois arrivé.
+
+{Message_commun}""",
+
+    "confirm_3_3": """Salut {customer_first_name},
+Excellente décision ! Tu rejoins les 320+ entrepreneurs qui ont dit adieu aux abonnements.
+
+{Message_commun}""",
+
+    "confirm_3_4": """Salut {customer_first_name},
+Tu l'as fait juste à temps, félicitations ! L'offre spéciale est maintenant terminée, mais ta licence à vie est bien sécurisée.
+
+{Message_commun}""",
+
+    "confirm_3_5": """Salut {customer_first_name},
+Vraiment content que tu aies pu saisir cette toute dernière opportunité avant la fermeture définitive. Bienvenue ! 🙌
+
+{Message_commun}""",
+}
+
+# -------------------------------------------
+# Templates WhatsApp
+# -------------------------------------------
+
+TEMPLATES_WHATSAPP = {
+    
+    # Relances WhatsApp
+    "relance_t30": (
+        "Salut {customer_first_name}, c'est Yanick de Digitech Hub 👋\n"
+        "J'ai vu que tu as essayé de prendre ta licence Microsoft 365 mais que ça n'a pas abouti.\n"
+        "Souvent, c'est juste un petit bug avec le paiement Mobile Money, t'inquiète pas ! Ça arrive.\n"
+        "J'ai gardé ton panier de côté pour toi. Tu peux réessayer directement ici :\n"
+        "👉 {checkout_url}\n"
+        "Dis-moi si ça bloque quelque part, je suis là pour aider ! 😉"
+    ),
+
+    "relance_t6h": (
+        "Salut {customer_first_name} 😊\n"
+        "Je comprends que l'offre pour Microsoft 365 à vie à {price_current_fmt} puisse faire hésiter.\n"
+        "Mon but chez Digitech Hub est simple : casser les barrières du numérique en Afrique. "
+        "Rendre les meilleurs outils accessibles à tous, sans la contrainte des abonnements.\n"
+        "C'est pour ça que +320 entrepreneurs nous font déjà confiance.\n"
+        "Et ma garantie personnelle : si tu as besoin d'aide, c'est moi, Yanick, qui te réponds et qui t'assiste pour tout installer. Pas de robot.\n"
+        "Ne laisse pas un doute te priver de cette tranquillité !\n"
+        "👉 {checkout_url}"
+    ),
+
+    "relance_t23h": (
+        "{customer_first_name}, attention ! ⚠️\n"
+        "Dernier rappel : l'offre pour ta licence Microsoft 365 à vie à {price_current_fmt} se termine ce soir.\n"
+        "Après, le prix repasse à {price_after_fmt}.\n"
+        "Le choix est simple :\n"
+        "❌ Continuer avec le stress des abonnements.\n"
+        "✅ Payer 1 seule fois et avoir la paix pour TOUJOURS.\n"
+        "C'est ta dernière chance de saisir cette économie. Ne la manque pas !\n"
+        "👉 {checkout_url}"
+    ),
+
+    "relance_t47h": (
+        "{customer_first_name}, dernier message.\n"
+        "Suite à des bugs de paiement hier, j'ai exceptionnellement prolongé l'offre. "
+        "Elle se termine DÉFINITIVEMENT ce soir à minuit. 🕛\n"
+        "Après cette heure, la page de paiement sera désactivée.\n"
+        "Si tu veux ta licence à vie à {price_current_fmt}, c'est maintenant ou jamais. Il n'y aura pas d'autre chance.\n"
+        "👉 {checkout_url}"
+    ),
+
+    # Confirmations WhatsApp 3.1 → 3.5
+    "confirm_3_1": (
+        "Félicitations {customer_first_name} ! 🎉 Ta licence Microsoft 365 à vie est activée. "
+        "Tu as fait un excellent choix.\n"
+        "{Message_commun_wa}"
+        "Si t'as besoin d'aide pour l'installation, je suis là ! Dis-moi juste. 😉\n\n"
+        "-Yanick"
+    ),
+    "confirm_3_2": (
+        "Super {customer_first_name}, content que ça ait marché ! 👍\n"
+        "Ta licence à vie est maintenant sécurisée.\n"
+        "{Message_commun_wa}"
+        "Dis-moi si tu as besoin d'un coup de main pour l'installation !\n\n"
+        "-Yanick"
+    ),
+    "confirm_3_3": (
+        "Excellente décision {customer_first_name} ! Tu ne le regretteras pas. 😉\n"
+        "Bienvenue dans le mouvement pour l'émancipation numérique.\n"
+        "{Message_commun_wa}"
+        "Je suis là si tu as des questions.\n\n"
+        "-Yanick"
+    ),
+    "confirm_3_4": (
+        "Félicitations {customer_first_name}, tu l'as eu juste à temps ! 🤝\n"
+        "L'offre est terminée, mais ta licence à vie est bien au chaud.\n"
+        "{Message_commun_wa}"
+        "Bienvenue !\n\n"
+        "-Yanick"
+    ),
+    "confirm_3_5": (
+        "YES {customer_first_name} ! Vraiment content que tu aies pu en profiter avant la fermeture définitive. Bienvenue ! 🙌\n"
+        "{Message_commun_wa}"
+        "Profites-en bien !\n\n"
+        "-Yanick"
+    ),
 }

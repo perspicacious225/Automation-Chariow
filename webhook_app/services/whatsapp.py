@@ -70,6 +70,6 @@ class WhatsAppService:
             logger.error(f"Failed to send to {chat_id}: {str(e)}")
             return False
 
-test =  WhatsAppService()
+# test =  WhatsAppService()
 
-print(test.normalize_for_dedupe("2250789333113"))
+# print(test.normalize_for_dedupe("2250789333113"))

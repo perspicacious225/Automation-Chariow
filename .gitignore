@@ -20,3 +20,4 @@ data/
 __pycache__/
 *.pyc
 
+CHANGELOG_2.3.txt

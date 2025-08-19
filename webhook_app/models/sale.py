@@ -7,7 +7,7 @@ class Sale:
     status: str
     product_name: str
     product_id: str
-    customer_name: str
+    customer_first_name: str
     customer_phone: str
     customer_country: str
     customer_email: str
@@ -18,6 +18,7 @@ class Sale:
     created_at: str
     product_value: str
     current_year:str
+    currency: str
 
     @classmethod
     def from_webhook(cls, payload: Dict[str, Any]) -> 'Sale':
@@ -27,7 +28,7 @@ class Sale:
             status=sale.get("status"),
             product_name=payload.get("product", {}).get("name"),
             product_id=payload.get("product", {}).get("id"),
-            customer_name=payload.get("customer", {}).get("name"),
+            customer_first_name=payload.get("customer", {}).get("first_name"),
             customer_phone=payload.get("customer", {}).get("phone"),
             customer_country=payload.get("customer", {}).get("country"),
             customer_email=payload.get("customer", {}).get("email"),
@@ -35,8 +36,10 @@ class Sale:
             store_url=payload.get("store", {}).get("url"),
             checkout_url=payload.get("checkout", {}).get("url"),
             amount=sale.get("amount", {}).get("value"),
+            currency=sale.get("amount", {}).get("currency"),
             created_at=sale.get("created_at", "").split("T")[0],
             product_value=payload.get("product", {}).get("price", {}).get("value"),
             current_year=sale.get("created_at", "").split("T")[0].split("-")[0]
         )
     
+
