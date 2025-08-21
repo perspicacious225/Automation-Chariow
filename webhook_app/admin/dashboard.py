@@ -64,7 +64,7 @@ def metrics_json():
 
         # Ventes 1j
         data["gmv_1d"] = _scalar(conn,
-          "SELECT COALESCE(SUM(amount_value-(amount_value*0.15)),0) FROM fact_sales WHERE status='completed' AND COALESCE(completed_at,created_at) >= datetime('now','-1 day')"
+          "SELECT COALESCE(SUM(amount_value-(amount_value*0.15)),0) FROM fact_sales WHERE status='completed' AND COALESCE(completed_at,created_at) >= datetime('now','start of day')"
         )
         # Ventes 7j
         data["gmv_7d"] = _scalar(conn,
@@ -80,10 +80,10 @@ def metrics_json():
 
         # Abandons/failed 24h
         data["abandoned_24h"] = _scalar(conn,
-          "SELECT COUNT(*) FROM fact_sales WHERE status='abandoned' AND COALESCE(abandoned_at,created_at) >= datetime('now','-1 day')"
+          "SELECT COUNT(*) FROM fact_sales WHERE status='abandoned' AND COALESCE(abandoned_at,created_at) >= datetime('now','start of day')"
         )
         data["failed_24h"] = _scalar(conn,
-          "SELECT COUNT(*) FROM fact_sales WHERE status='failed' AND COALESCE(created_at,completed_at) >= datetime('now','-1 day')"
+          "SELECT COUNT(*) FROM fact_sales WHERE status='failed' AND COALESCE(created_at,completed_at) >= datetime('now','start of day')"
         )
 
         # Recovered 7j (orders + GMV) et taux de panier récupéré
@@ -315,15 +315,15 @@ async function load(){
   const pct = (x)=> (x*100).toFixed(1)+'%';
   k.innerHTML = `
     <div class="card"><div class="muted">GMV 1j</div><div class="kpi">${(m.gmv_1d||0).toFixed(0)}</div></div>
-    <div class="card"><div class="muted">Commandes 1j</div><div class="kpi">${m.orders_7d||0}</div></div>
+    <div class="card"><div class="muted">Commandes 1j</div><div class="kpi">${m.orders_1d||0}</div></div>
     <div class="card"><div class="muted">GMV 7j</div><div class="kpi">${(m.gmv_7d||0).toFixed(0)}</div></div>
     <div class="card"><div class="muted">Commandes 7j</div><div class="kpi">${m.orders_7d||0}</div></div>
     <div class="card"><div class="muted">AOV 7j</div><div class="kpi">${(m.aov_7d||0).toFixed(0)}</div></div>
     <div class="card"><div class="muted">Recovered GMV 7j</div><div class="kpi">${(m.recovered_gmv_7d||0).toFixed(0)}</div></div>
     <div class="card"><div class="muted">Recovered Orders 7j</div><div class="kpi">${m.recovered_orders_7d||0}</div></div>
     <div class="card"><div class="muted">Recovered Rate 7j</div><div class="kpi">${m.ab_failed_7d? pct(m.recovered_rate_7d||0): 'n/a'}</div></div>
-    <div class="card"><div class="muted">Abandons 24h</div><div class="kpi">${m.abandoned_24h||0}</div></div>
-    <div class="card"><div class="muted">Failed 24h</div><div class="kpi">${m.failed_24h||0}</div></div>
+    <div class="card"><div class="muted">Abandons today</div><div class="kpi">${m.abandoned_24h||0}</div></div>
+    <div class="card"><div class="muted">Failed todayh</div><div class="kpi">${m.failed_24h||0}</div></div>
     <div class="card"><div class="muted">Relances échues</div><div class="kpi">${m.pending_due||0}</div></div>
     <div class="card"><div class="muted">Relances planifiées</div><div class="kpi">${m.pending_future||0}</div></div>
     <div class="card"><div class="muted">24h Email</div><div class="kpi">${m.sent_24h_email||0}</div></div>
