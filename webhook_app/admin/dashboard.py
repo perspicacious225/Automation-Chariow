@@ -74,7 +74,7 @@ def metrics_json():
           "SELECT COUNT(*) FROM fact_sales WHERE status='completed' AND COALESCE(completed_at,created_at) >= datetime('now','-7 day')"
         )
         data["orders_1d"] = _scalar(conn,
-          "SELECT COUNT(*) FROM fact_sales WHERE status='completed' AND COALESCE(completed_at,created_at) >= datetime('now','-1 day')"
+          "SELECT COUNT(*) FROM fact_sales WHERE status='completed' AND COALESCE(completed_at,created_at) >= datetime('now','start of day')"
         )
         data["aov_7d"] = (data["gmv_7d"] / data["orders_7d"]) if data["orders_7d"] else 0.0
 
