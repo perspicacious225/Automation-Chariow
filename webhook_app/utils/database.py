@@ -696,3 +696,115 @@ def has_recent_contact_product_notification(email: str, phone: str, product_id: 
         return cur.fetchone() is not None
     finally:
         conn.close()
+
+
+#--------------------------------------------------------- templates setings
+# --- À mettre dans webhook_app/utils/database.py (ajouter ces fonctions ou remplacer les versions existantes) ---
+# import sqlite3
+# from webhook_app.config import Config
+
+def ensure_templates_schema():
+    """
+    Crée la table message_templates + index, sans UNIQUE avec expression dans la clause de table
+    (SQLite l'interdit), mais avec un UNIQUE INDEX par expression IFNULL(product_id,'').
+    """
+    conn = sqlite3.connect(Config.DB_PATH)
+    try:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS message_templates (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id    TEXT,                 -- NULL => global
+          template_type TEXT NOT NULL,        -- ex: relance_t30, relance_t6h, confirm_3_2...
+          channel       TEXT NOT NULL,        -- 'email' | 'whatsapp'
+          subject       TEXT,                 -- email uniquement
+          body          TEXT NOT NULL,        -- html (fragment ou complet) ou texte WhatsApp
+          is_full_html  INTEGER NOT NULL DEFAULT 0,
+          is_active     INTEGER NOT NULL DEFAULT 1,
+          updated_at    DATETIME NOT NULL DEFAULT (datetime('now')),
+          created_at    DATETIME NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Index “normaux”
+        CREATE INDEX IF NOT EXISTS idx_msgtpl_product  ON message_templates(product_id);
+        CREATE INDEX IF NOT EXISTS idx_msgtpl_key      ON message_templates(template_type, channel);
+
+        -- Contrainte d'unicité logique:
+        -- on veut 1 seul template par (product_id||'' , template_type, channel).
+        -- Impossible dans UNIQUE de table (expressions interdites), donc on passe par un UNIQUE INDEX.
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_msgtpl_norm
+          ON message_templates(IFNULL(product_id,''), template_type, channel);
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_template(product_id, template_type, channel, subject, body, is_full_html=False, is_active=True):
+    """
+    UPSERT “manuel” compatible SQLite :
+      - On cherche s'il existe déjà une ligne où IFNULL(product_id,'') = IFNULL(?, '')
+        ET (template_type, channel) identiques.
+      - Si oui: UPDATE
+      - Sinon: INSERT
+
+    Avantage: pas de dépendance à ON CONFLICT sur index d'expression.
+    """
+    pid_norm = "" if (product_id is None or str(product_id).strip() == "") else str(product_id).strip()
+    conn = sqlite3.connect(Config.DB_PATH)
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("""
+            SELECT id FROM message_templates
+            WHERE IFNULL(product_id,'') = ? AND template_type = ? AND channel = ?
+            LIMIT 1
+        """, (pid_norm, template_type, channel))
+        row = cur.fetchone()
+        if row:
+            conn.execute("""
+                UPDATE message_templates
+                   SET subject = ?, body = ?, is_full_html = ?, is_active = ?,
+                       updated_at = datetime('now')
+                 WHERE id = ?
+            """, (subject, body, 1 if is_full_html else 0, 1 if is_active else 0, row["id"]))
+        else:
+            conn.execute("""
+                INSERT INTO message_templates (product_id, template_type, channel, subject, body, is_full_html, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (None if pid_norm == "" else pid_norm,
+                  template_type, channel, subject, body,
+                  1 if is_full_html else 0, 1 if is_active else 0))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_template(product_id, template_type, channel):
+    """
+    Résolution par priorité:
+      1) Template spécifique produit (product_id exact)
+      2) Template global (product_id IS NULL)
+    Retourne un dict (ou None).
+    """
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        # 1) spécifique
+        if product_id:
+            cur = conn.execute("""
+              SELECT * FROM message_templates
+               WHERE product_id = ? AND template_type = ? AND channel = ? AND is_active = 1
+               LIMIT 1
+            """, (product_id, template_type, channel))
+            row = cur.fetchone()
+            if row:
+                return dict(row)
+        # 2) global
+        cur = conn.execute("""
+          SELECT * FROM message_templates
+            WHERE product_id IS NULL AND template_type = ? AND channel = ? AND is_active = 1
+            LIMIT 1
+        """, (template_type, channel))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()

@@ -8,7 +8,8 @@ from webhook_app.utils.database import (
     ensure_schema_for_webhooks, save_webhook_raw,
     ensure_schema_for_notifications, ensure_schema_for_scheduled,
     ensure_notification_log_columns, ensure_scheduled_contact_columns,
-    ensure_fact_dims_schema, upsert_fact_from_webhook, rfm_recompute
+    ensure_fact_dims_schema, upsert_fact_from_webhook,
+    rfm_recompute,ensure_templates_schema
 )
 
 
@@ -40,6 +41,7 @@ def create_app():
     ensure_notification_log_columns()       # ajoute recipient_email/phone/contact_key/product_id + index
     ensure_schema_for_webhooks()            # archive webhooks
     ensure_fact_dims_schema()
+    ensure_templates_schema()               
 
 
     # ----- Scheduler (un seul démarrage) -----

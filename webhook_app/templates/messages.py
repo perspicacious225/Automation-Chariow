@@ -17,7 +17,7 @@ Message_commun = """<div style="background:#F3F9FB;border:1px dashed #0078D4;pad
   Tu auras alors accès instantanément à tes achats.</p>
 
   <p>Et n'oublie pas : si tu rencontres la moindre difficulté pour l'installation, je suis là. Réponds simplement à ce message ou contacte-moi sur WhatsApp
-    <a href="https://wa.me/2250789333113" style="color:#0078D4;text-decoration:underline;">wa.me/2250789333113</a>.
+    <a href="https://wa.me/2250576654850" style="color:#0078D4;text-decoration:underline;">wa.me/2250576654850</a>.
     C'est moi, Yanick, qui t'assisterai personnellement.
   </p>
 
@@ -62,7 +62,6 @@ EMAIL_SUBJECTS = {
 
 # -------------------------------------------
 # Templates e-mail (HTML)
-# NB: doubles accolades {{ }} à l'intérieur du CSS pour éviter .format()
 # -------------------------------------------
 
 EMAIL_TEMPLATES = {
@@ -347,3 +346,31 @@ TEMPLATES_WHATSAPP = {
         "-Yanick"
     ),
 }
+
+
+
+def render_email_with_brand(fragment_html: str, vars_dict: dict) -> str:
+    # Amélioration possible du css (inline CSS only pour la compatibilité)
+    header = f"""
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  body{{font-family:'Segoe UI',Arial,sans-serif;line-height:1.6;color:#2d2d2d;background:#f5f5f5;margin:0}}
+  .container{{max-width:650px;margin:0 auto;background:#fff;border-radius:8px;box-shadow:0 3px 10px rgba(0,0,0,.08);overflow:hidden}}
+  .head{{background:linear-gradient(135deg,#0D47A1 0%,#003b8b 100%);color:#fff;padding:24px 20px}}
+  .content{{padding:24px}}
+  .btn{{background:#0D47A1;color:#fff;text-decoration:none;padding:12px 20px;border-radius:6px;display:inline-block}}
+  .footer{{background:#F3F2F1;color:#666;padding:16px 20px;font-size:12px;text-align:center}}
+  a{{color:#0D47A1}}
+</style></head><body><div class="container">
+<div class="head"><h1 style="margin:0;font-size:20px;">{vars_dict.get('store_name','')}</h1></div>
+<div class="content">
+"""
+    footer = f"""
+</div>
+<div class="footer">
+  {vars_dict.get('store_name','')} © {vars_dict.get('current_year','')} ·
+  <a href="{vars_dict.get('store_url','#')}">Boutique</a>
+</div>
+</div></body></html>
+"""
+    return header + fragment_html + footer

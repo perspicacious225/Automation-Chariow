@@ -5,7 +5,7 @@ from webhook_app.utils.database import (
     fetch_due_scheduled,
     mark_scheduled_error,
     claim_scheduled_job,
-    has_confirmation_for_contact_product,
+    has_confirmation_for_contact_product, cancel_cadence_for
 )
 from webhook_app.models.sale import Sale
 
@@ -48,6 +48,11 @@ def start_scheduler(send_func: Callable[[Sale, str], bool]):
                                 "job_id=%s tpl=%s contact=%s product=%s",
                                 job_id, tpl, ckey, pkey
                             )
+                            try:
+                                n = cancel_cadence_for(ckey, pkey)
+                                logger.info("[CANCEL] cadence supprimée (%s jobs) contact=%s produit=%s", n, ckey, pkey)
+                            except Exception:
+                                logger.exception("Cancel cadence failed")
                             # Rien d'autre à faire : le claim a déjà mis sent_at.
                             continue
 

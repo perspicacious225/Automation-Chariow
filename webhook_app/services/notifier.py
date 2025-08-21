@@ -1,12 +1,15 @@
 import logging, os, re, unicodedata, hashlib, datetime
 from webhook_app.models.sale import Sale
 from webhook_app.templates import messages
+from webhook_app.templates.messages import render_email_with_brand
 from .mailer import EmailService, to_plain
 from .whatsapp import WhatsAppService
 from webhook_app.config import Config, RELANCE_DELAYS, RELANCE_DELAYS_A, RELANCE_DELAYS_B, WHATSAPP_AND_EMAIL_ALWAYS
 from webhook_app.utils.database import (
-    Database, enqueue_notification, has_active_cadence_for, refresh_cadence_payload,
-    has_recent_contact_product_notification, cancel_cadence_for, has_confirmation_for_contact_product, latest_relance_step
+    Database, enqueue_notification, has_active_cadence_for, 
+    refresh_cadence_payload, get_template,
+    has_recent_contact_product_notification, cancel_cadence_for,
+    has_confirmation_for_contact_product, latest_relance_step
 )
 
 
@@ -82,7 +85,7 @@ class Notifier:
 
         # fallback s’il manque le prix barré : garde un différentiel lisible
         if (pa is None or pa == 0) and pc:
-            pa = round(pc * 3.0)
+            pa = round(pc * 3.5)
 
         return pc, pa, cur
 
@@ -135,74 +138,106 @@ class Notifier:
         contact_key = self._contact_key(sale)
         product_key = self._product_key(sale)
 
+        # Annule toute relance si une confirmation a déjà été envoyée pour ce contact+produit
         if template_type.startswith("relance_"):
-            # Si une confirmation (confirm_3_*) a déjà été envoyée pour ce couple,
-            # on ne renvoie AUCUNE relance (même si un job a été « claimé » ailleurs)
             if has_confirmation_for_contact_product(contact_key, product_key):
-                logger.info(
-                    "[SKIP] relance annulée: confirmation déjà envoyée (contact=%s, produit=%s, tpl=%s)",
-                    contact_key, product_key, template_type
-                )
+                logger.info("[SKIP] relance annulée: confirmation déjà envoyée (contact=%s, produit=%s, tpl=%s)",
+                            contact_key, product_key, template_type)
                 return True
+
+        # Blocs communs rendus une fois
         if hasattr(messages, "Message_commun"):
             tvars["Message_commun"] = _render(messages.Message_commun, tvars)
-
         if hasattr(messages, "Message_commun_wa"):
             tvars["Message_commun_wa"] = _render(messages.Message_commun_wa, tvars)
 
-        # email
+        # -------- EMAIL --------
         email_raw  = sale.customer_email
         email_norm = norm_email(email_raw)
-
         email_key  = f"{email_norm}|{product_key}" if email_norm else None
 
         email_previously_sent = self._already_sent(sale, "email", template_type, email_key)
         if not email_previously_sent and email_raw:
-            tpl = messages.EMAIL_TEMPLATES.get(template_type)
-            sub = messages.EMAIL_SUBJECTS.get(template_type, "")
-            if tpl:
-                html = _render(tpl, tvars)
-                subject = _render(f"{sub} {sale.store_name}", tvars).strip()
-                ok_email = self.email_service.send_email(
-                    recipient=email_raw,
-                    subject=subject,
-                    html_body=html,
-                    plain_fallback=to_plain(html)
+            # Cherche un template DB spécifique au produit
+            dbtpl = get_template(sale.product_id, template_type, "email")
+            if dbtpl:
+                # Sujet
+                subject_tpl = (dbtpl.get("subject") or "").strip()
+                subject = subject_tpl.format_map(_SafeDict(tvars)) if subject_tpl else _render(
+                    f"{messages.EMAIL_SUBJECTS.get(template_type,'')} {sale.store_name}".strip(), tvars
                 )
-                if ok_email:
-                    self.db.mark_notified(sale.id, "email", template_type, email_key,
-                        recipient_email=email_norm, contact_key=contact_key, product_id=product_key, ab_arm=ab_arm)
-                    logger.info("[SENT][email] sale=%s template=%s to=%s", sale.id, template_type, email_key)
+                #mode HTML complet ou fragment
+                body_tpl = dbtpl.get("body") or ""
+                if int(dbtpl.get("is_full_html") or 0) == 1:
+                    html = body_tpl.format_map(_SafeDict(tvars))
+                else:
+                    fragment = body_tpl.format_map(_SafeDict(tvars))
+                    html = render_email_with_brand(fragment, tvars)
             else:
-                logger.info("[SKIP][email] template manquant pour '%s'", template_type)
+                # Fallback sur messages.py
+                tpl = messages.EMAIL_TEMPLATES.get(template_type)
+                sub = messages.EMAIL_SUBJECTS.get(template_type, "")
+                if not tpl:
+                    logger.info("[SKIP][email] template manquant pour '%s'", template_type)
+                    tpl = ""
+                html = _render(tpl, tvars)
+                subject = _render(f"{sub} {sale.store_name}".strip(), tvars)
+
+            ok_email = self.email_service.send_email(
+                recipient=email_raw,
+                subject=subject,
+                html_body=html,
+                plain_fallback=to_plain(html)
+            )
+            if ok_email:
+                self.db.mark_notified(
+                    sale.id, "email", template_type, email_key,
+                    recipient_email=email_norm, contact_key=contact_key, product_id=product_key, ab_arm=ab_arm
+                )
+                logger.info("[SENT][email] sale=%s template=%s to=%s", sale.id, template_type, email_key)
         else:
             if email_previously_sent:
                 logger.info("[SKIP][email] déjà envoyé: template=%s recipient=%s", template_type, email_key)
             else:
                 logger.info("[SKIP][email] pas d'email pour sale=%s", sale.id)
 
-        # whatsapp
+        # -------- WHATSAPP --------
         send_whatsapp_allowed = WHATSAPP_AND_EMAIL_ALWAYS or (not email_previously_sent) or (email_norm is None)
         phone_raw = sale.customer_phone
         phone_key = self.whatsapp_service.normalize_for_dedupe(phone_raw) if phone_raw else None
         wa_key    = f"{phone_key}|{product_key}" if phone_key else None
-        wa_tpl    = messages.TEMPLATES_WHATSAPP.get(template_type)
 
-        if send_whatsapp_allowed and wa_tpl and phone_raw and phone_key:
-            if self._already_sent(sale, "whatsapp", template_type, wa_key):
-                logger.info("[SKIP][whatsapp] déjà envoyé: template=%s recipient=%s", template_type, wa_key)
+        if send_whatsapp_allowed and phone_raw and phone_key:
+            # 1 DB d’abord
+            wa_tpl_row = get_template(sale.product_id, template_type, "whatsapp")
+            if wa_tpl_row and (wa_tpl_row.get("body") or "").strip():
+                wa_tpl = wa_tpl_row["body"]
             else:
-                wa_msg = _render(wa_tpl, tvars)
-                ok_wa = self.whatsapp_service.send_message(phone_raw, wa_msg)
-                if ok_wa:
-                    self.db.mark_notified(sale.id, "whatsapp", template_type, wa_key,
-                        recipient_phone=phone_key, contact_key=contact_key, product_id=product_key, ab_arm=ab_arm)
-                    logger.info("[SENT][whatsapp] sale=%s template=%s to=%s", sale.id, template_type, wa_key)
-        else:
-            if not wa_tpl:
+                # 2 fallback messages.py
+                wa_tpl = messages.TEMPLATES_WHATSAPP.get(template_type)
+
+            if wa_tpl:
+                if self._already_sent(sale, "whatsapp", template_type, wa_key):
+                    logger.info("[SKIP][whatsapp] déjà envoyé: template=%s recipient=%s", template_type, wa_key)
+                else:
+                    wa_msg = _render(wa_tpl, tvars)
+                    ok_wa = self.whatsapp_service.send_message(phone_raw, wa_msg)
+                    if ok_wa:
+                        self.db.mark_notified(
+                            sale.id, "whatsapp", template_type, wa_key,
+                            recipient_phone=phone_key, contact_key=contact_key, product_id=product_key, ab_arm=ab_arm
+                        )
+                        logger.info("[SENT][whatsapp] sale=%s template=%s to=%s", sale.id, template_type, wa_key)
+            else:
                 logger.info("[SKIP][whatsapp] template manquant pour '%s'", template_type)
+        else:
+            if not send_whatsapp_allowed:
+                logger.info("[SKIP][whatsapp] porte fermée par stratégie (email déjà reçu)")
+            elif not phone_raw or not phone_key:
+                logger.info("[SKIP][whatsapp] téléphone non disponible/normalisable")
 
         return True
+
 
     # ========= Entrées publiques =========
     def handle_abandoned(self, sale: Sale):
