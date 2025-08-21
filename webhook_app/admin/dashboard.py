@@ -73,6 +73,9 @@ def metrics_json():
         data["orders_7d"] = _scalar(conn,
           "SELECT COUNT(*) FROM fact_sales WHERE status='completed' AND COALESCE(completed_at,created_at) >= datetime('now','-7 day')"
         )
+        data["orders_1d"] = _scalar(conn,
+          "SELECT COUNT(*) FROM fact_sales WHERE status='completed' AND COALESCE(completed_at,created_at) >= datetime('now','-1 day')"
+        )
         data["aov_7d"] = (data["gmv_7d"] / data["orders_7d"]) if data["orders_7d"] else 0.0
 
         # Abandons/failed 24h
@@ -312,7 +315,7 @@ async function load(){
   const pct = (x)=> (x*100).toFixed(1)+'%';
   k.innerHTML = `
     <div class="card"><div class="muted">GMV 1j</div><div class="kpi">${(m.gmv_1d||0).toFixed(0)}</div></div>
-    <div class="card"><div class="muted">Commandes 7j</div><div class="kpi">${m.orders_7d||0}</div></div>
+    <div class="card"><div class="muted">Commandes 1j</div><div class="kpi">${m.orders_7d||0}</div></div>
     <div class="card"><div class="muted">GMV 7j</div><div class="kpi">${(m.gmv_7d||0).toFixed(0)}</div></div>
     <div class="card"><div class="muted">Commandes 7j</div><div class="kpi">${m.orders_7d||0}</div></div>
     <div class="card"><div class="muted">AOV 7j</div><div class="kpi">${(m.aov_7d||0).toFixed(0)}</div></div>
