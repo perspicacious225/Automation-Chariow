@@ -84,19 +84,19 @@ class Config:
 
 
 # ===== Strategy parameters =====
-RELANCE_DELAYS = {
-    "t30": 1,
-    "t6h": 2,
-    "t23h": 3,
-    "t47h": 4
-}
-# Valeurs PROD recommandées :
 # RELANCE_DELAYS = {
-#     "t30": 2,
-#     "t6h": 6*60,
-#     "t23h": 23*60,
-#     "t47h": 47*60
+#     "t30": 1,
+#     "t6h": 2,
+#     "t23h": 3,
+#     "t47h": 4
 # }
+# Valeurs PROD recommandées :
+RELANCE_DELAYS = {
+    "t30": 2,
+    "t6h": 6*60,
+    "t23h": 23*60,
+    "t47h": 47*60
+}
 
 # ===== A/B test des timings =====
 RELANCE_DELAYS_A = RELANCE_DELAYS  # bras contrôle
