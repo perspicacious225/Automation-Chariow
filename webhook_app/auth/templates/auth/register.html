@@ -1,0 +1,70 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Inscription{% endblock %}
+{% block body_class %}page-auth register{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-card" role="dialog" aria-labelledby="register-title">
+    <h1 id="register-title" class="auth-title">Inscription</h1>
+
+    <form method="post" class="auth-form" novalidate>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email"
+               type="email"
+               name="email"
+               autocomplete="username"
+               required
+               autofocus>
+      </div>
+
+      <div class="field password-field">
+        <label for="password">Mot de passe</label>
+        <div class="password-input">
+          <input id="password"
+                 type="password"
+                 name="password"
+                 autocomplete="new-password"
+                 required>
+          <button type="button"
+                  class="toggle-pass"
+                  aria-label="Afficher ou masquer le mot de passe">👁</button>
+        </div>
+      </div>
+
+      {# Option visible uniquement si l’utilisateur courant est admin #}
+      {% if current_user.is_authenticated and current_user.is_admin %}
+      <div class="field" style="display:flex;align-items:center;gap:10px">
+        <input id="is_admin" type="checkbox" name="is_admin" value="1">
+        <label for="is_admin" style="margin:0">Donner les droits admin</label>
+      </div>
+      {% endif %}
+
+      <div class="actions">
+        <button class="btn primary" type="submit">Créer le compte</button>
+      </div>
+    </form>
+
+    <div class="auth-alt">
+      Déjà un compte ? <a href="{{ url_for('auth.login') }}">Se connecter</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Afficher/masquer le mot de passe
+  (function(){
+    const btn = document.querySelector('.toggle-pass');
+    const input = document.getElementById('password');
+    if (btn && input) {
+      btn.addEventListener('click', () => {
+        const isPwd = input.type === 'password';
+        input.type = isPwd ? 'text' : 'password';
+        btn.setAttribute('aria-pressed', String(isPwd));
+      });
+    }
+  })();
+</script>
+{% endblock %}

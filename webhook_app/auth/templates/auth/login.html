@@ -1,0 +1,51 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Connexion{% endblock %}
+{% block body_class %}page-auth login{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-card" role="dialog" aria-labelledby="login-title">
+    <h1 id="login-title" class="auth-title">Connexion</h1>
+
+    <form method="post" class="auth-form" novalidate>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" type="email" name="email" autocomplete="username" required autofocus>
+      </div>
+
+      <div class="field password-field">
+        <label for="password">Mot de passe</label>
+        <div class="password-input">
+          <input id="password" type="password" name="password" autocomplete="current-password" required>
+          <button type="button" class="toggle-pass" aria-label="Afficher ou masquer le mot de passe">👁</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" type="submit">Se connecter</button>
+      </div>
+    </form>
+
+    <div class="auth-alt">
+      Pas de compte ? <a href="{{ url_for('auth.register') }}">Créer un compte</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Petit bonus UX : afficher/masquer le mot de passe
+  (function(){
+    const btn = document.querySelector('.toggle-pass');
+    const input = document.getElementById('password');
+    if (btn && input) {
+      btn.addEventListener('click', () => {
+        const isPwd = input.type === 'password';
+        input.type = isPwd ? 'text' : 'password';
+        btn.setAttribute('aria-pressed', String(isPwd));
+      });
+    }
+  })();
+</script>
+{% endblock %}

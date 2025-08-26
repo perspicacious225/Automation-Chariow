@@ -1,0 +1,112 @@
+{% extends "dashboard/base.html" %}
+{% block title %}{{ "Modifier" if rid else "Nouveau" }} template{% endblock %}
+{% block body_class %}page-templates-edit{% endblock %}
+
+{% block head_extra %}
+  <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
+{% endblock %}
+
+{% block content %}
+  <h1 class="page-title">{{ "Modifier" if rid else "Nouveau" }} template</h1>
+
+  <div class="card form-card">
+    <form method="post" id="tplForm" class="tpl-form">
+
+      <!-- Ligne 1 : Produit / Type / Canal -->
+      <div class="fields">
+        <div class="field">
+          <label>Produit (ID)</label>
+          <input type="text"
+                 name="product_id"
+                 value="{{ product_id or pid_prefill or '' }}"
+                 placeholder="ex: prd_k3eyyy">
+        </div>
+
+        <div class="field">
+          <label>Template type</label>
+          <input list="tplTypes"
+                 type="text"
+                 name="template_type"
+                 value="{{ template_type or '' }}"
+                 required
+                 placeholder="ex: relance_t30, relance_t6h, confirm_3_2">
+          <datalist id="tplTypes">
+            {% for t in suggested_types %}
+              <option value="{{ t }}"></option>
+            {% endfor %}
+          </datalist>
+        </div>
+
+        <div class="field">
+          <label>Canal</label>
+          <select name="channel">
+            <option value="email" {{ "selected" if (channel or "email")=="email" else "" }}>email</option>
+            <option value="whatsapp" {{ "selected" if (channel or "email")=="whatsapp" else "" }}>whatsapp</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Sujet (email uniquement) -->
+      <div class="field">
+        <label>Sujet (email uniquement)</label>
+        <input type="text"
+               name="subject"
+               value="{{ subject or '' }}"
+               placeholder="ex: Un souci avec ta commande ?">
+      </div>
+
+      <!-- Corps -->
+      <div class="field">
+        <label>Corps</label>
+        <textarea name="body"
+                  id="bodyArea"
+                  spellcheck="false"
+                  placeholder="HTML complet (si coché) ou fragment HTML (email), texte brut (WhatsApp)">{{ body or '' }}</textarea>
+      </div>
+
+      <!-- Placeholders -->
+      <div class="help muted placeholder-box">
+        <div class="legend">Placeholders disponibles :</div>
+        <div class="badges">
+          <span class="badge">{{ "{{customer_first_name}}" }}</span>
+          <span class="badge">{{ "{{customer_email}}" }}</span>
+          <span class="badge">{{ "{{product_name}}" }}</span>
+          <span class="badge">{{ "{{checkout_url}}" }}</span>
+          <span class="badge">{{ "{{price_current_fmt}}" }}</span>
+          <span class="badge">{{ "{{price_after_fmt}}" }}</span>
+          <span class="badge">{{ "{{store_name}}" }}</span>
+          <span class="badge">{{ "{{store_url}}" }}</span>
+          <span class="badge">{{ "{{sale_id}}" }}</span>
+          <span class="badge">{{ "{{current_year}}" }}</span>
+        </div>
+      </div>
+
+      <!-- Barre d’actions : cases à gauche, boutons à droite -->
+      <div class="actions-bar">
+        <div class="checks">
+          <label class="check">
+            <input type="checkbox" name="is_full_html" {{ "checked" if is_full_html else "" }}>
+            <span>HTML complet (email)</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" name="is_active" {{ "checked" if (is_active if is_active is not none else True) else "" }}>
+            <span>Actif</span>
+          </label>
+        </div>
+
+        <div class="buttons">
+          <button class="btn primary" type="submit">Enregistrer</button>
+          <button class="btn secondary" type="button" onclick="doPreview()">Prévisualiser</button>
+          <a class="btn ghost"
+             href="{{ url_for('dashboard.templates_for_product', id=(product_id or pid_prefill)) if (product_id or pid_prefill) else url_for('dashboard.templates_products') }}">
+            Annuler
+          </a>
+        </div>
+      </div>
+    </form>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script defer src="{{ url_for('dashboard.static', filename='templates.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Dashboard KPI — Relances & Ventes{% endblock %}
+
+{% block content %}
+  <h1>Dashboard KPI — Relances & Ventes</h1>
+  <a class="btn secondary" href="{{ url_for('dashboard.templates_products') }}">+ Ajouter un template</a>
+  <a class="logout" href="{{ url_for('auth.logout') }}">Logout</a>
+  <div class="grid" id="kpis"></div>
+
+  <div class="card">
+    <div class="muted">Conversions par step (7j)</div>
+    <div id="steps"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="muted">Top produits (7j)</div>
+      <table id="topprod"></table>
+    </div>
+    <div class="card">
+      <div class="muted">Pays (7j)</div>
+      <table id="countries"></table>
+    </div>
+    <div class="card">
+      <div class="muted">Segments RFM</div>
+      <table id="rfm"></table>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script defer src="{{ url_for('dashboard.static', filename='dashboard.js') }}"></script>
+{% endblock %}

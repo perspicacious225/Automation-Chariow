@@ -1,0 +1,44 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Templates — par produit{% endblock %}
+
+{% block content %}
+  <h1>Templates — par produit</h1>
+  <a class="btn secondary" href="{{ url_for('dashboard.dashboard_view') }}">← Retour Dashboard</a>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Produit</th>
+          <th>Templates</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+          <tr>
+            <td>{{ p.product_name }}</td>
+            <td>
+              <span class="pill">total: {{ p.nb_tpl }}</span>
+              <span class="pill">email: {{ p.nb_email }}</span>
+              <span class="pill">wa: {{ p.nb_whatsapp }}</span>
+            </td>
+            <td style="white-space:nowrap">
+              <a class="btn" href="{{ url_for('dashboard.templates_for_product', id=p.product_id) }}">Voir</a>
+              <a class="btn secondary" href="{{ url_for('dashboard.edit_template', pid=p.product_id) }}">+ Ajouter un template</a>
+              <form method="post"
+                    action="{{ url_for('dashboard.delete_product_post') }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Supprimer ce produit ET ses templates ?');">
+                <input type="hidden" name="product_id" value="{{ p.product_id }}">
+                <button class="btn danger" type="submit">Supprimer</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="muted">Aucun produit</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

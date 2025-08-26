@@ -1,0 +1,50 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Templates — {{ product_name }}{% endblock %}
+
+{% block content %}
+  <h1>Templates — {{ product_name }}</h1>
+
+  <div class="actions">
+    <a class="btn secondary" href="{{ url_for('dashboard.templates_products') }}">← Retour produits</a>
+    <a class="btn" href="{{ url_for('dashboard.edit_template', pid=pid) }}">+ Nouveau template</a>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Canal</th>
+          <th>HTML complet</th>
+          <th>Statut</th>
+          <th>Modifié</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in templates %}
+          <tr>
+            <td><code>{{ r.template_type }}</code></td>
+            <td>{{ r.channel }}</td>
+            <td>{{ 'Oui' if r.is_full_html else 'Non' }}</td>
+            <td>{{ 'actif' if r.is_active else 'inactif' }}</td>
+            <td class="muted">{{ r.updated_at or '' }}</td>
+            <td style="white-space:nowrap">
+              <a class="btn" href="{{ url_for('dashboard.preview_template') }}?id={{ r.id }}" target="_blank">Prévisualiser</a>
+              <a class="btn" href="{{ url_for('dashboard.edit_template', id=r.id) }}">Éditer</a>
+              <form method="post"
+                    action="{{ url_for('dashboard.delete_template_post') }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Supprimer ce template ?');">
+                <input type="hidden" name="id" value="{{ r.id }}">
+                <button class="btn danger" type="submit">Supprimer</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="muted">Aucun template pour ce produit</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

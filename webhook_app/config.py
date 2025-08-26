@@ -17,6 +17,7 @@ default_dump = "/opt/data/last_webhook.json" if IS_RENDER else _local_dump()
 DB_PATH = os.getenv("DB_PATH", default_db)
 WEBHOOK_DUMP_PATH = os.getenv("WEBHOOK_DUMP_PATH", default_dump)
 
+
 def _ensure_writable(path, fallback):
     d = os.path.dirname(path) or "."
     try:
@@ -37,7 +38,7 @@ WEBHOOK_DUMP_PATH = _ensure_writable(WEBHOOK_DUMP_PATH, _local_dump())
 class Config:
     DB_PATH = DB_PATH
     WEBHOOK_DUMP_PATH = WEBHOOK_DUMP_PATH
-
+    SECRET_KEY = os.getenv("SECRET_KEY")
     # WhatsApp
     INSTANCE_ID = os.getenv("WHATSAPP_INSTANCE_ID")
     TOKEN       = os.getenv("WHATSAPP_TOKEN")
@@ -84,27 +85,34 @@ class Config:
 
 
 # ===== Strategy parameters =====
-# RELANCE_DELAYS = {
-#     "t30": 1,
-#     "t6h": 2,
-#     "t23h": 3,
-#     "t47h": 4
-# }
-# Valeurs PROD recommandées :
 RELANCE_DELAYS = {
-    "t30": 2,
-    "t6h": 6*60,
-    "t23h": 23*60,
-    "t47h": 47*60
+    "t30": 1,
+    "t6h": 2,
+    "t23h": 3,
+    "t47h": 4
 }
+# Valeurs PROD recommandées :
+# RELANCE_DELAYS = {
+#     "t30": 2,
+#     "t6h": 6*60,
+#     "t23h": 23*60,
+#     "t47h": 47*60
+# }
 
 # ===== A/B test des timings =====
 RELANCE_DELAYS_A = RELANCE_DELAYS  # bras contrôle
+# RELANCE_DELAYS_B = {
+#     "t30": 5,       # minutes
+#     "t6h": 5*60,
+#     "t23h": 18*60,
+#     "t47h": 36*60,
+# }
+
 RELANCE_DELAYS_B = {
-    "t30": 5,       # minutes
-    "t6h": 5*60,
-    "t23h": 18*60,
-    "t47h": 36*60,
+    "t30": 1,       # minutes
+    "t6h": 2,
+    "t23h": 3,
+    "t47h": 4,
 }
 
 PRICE_CURRENT = int(os.getenv("PRICE_CURRENT", "5000"))

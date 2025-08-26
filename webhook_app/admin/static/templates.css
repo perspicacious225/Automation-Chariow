@@ -1,0 +1,165 @@
+/* ====== Page: /templates/view/edit ====== */
+.page-templates-edit main.container {
+  /* un peu plus d’air autour de la page */
+  padding: 40px 24px;
+}
+
+/* Carte/formulaire centré, largeur contenue, ombre douce */
+.page-templates-edit .form-card {
+  max-width: 860px;           /* assez étroit pour réduire la sensation “trop large” */
+  margin: 32px auto 64px;     /* centre horizontal + marge verticale */
+  box-shadow: 0 12px 30px rgba(0,0,0,.25);
+}
+
+/* Titre centré */
+.page-templates-edit .page-title {
+  text-align: center;
+  margin: 12px auto 18px;
+  font-size: 26px;
+}
+
+/* Form layout */
+.page-templates-edit .tpl-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;              /* respiration entre les groupes */
+}
+
+/* Ligne du haut : Produit / Type / Canal (3 colonnes) */
+.page-templates-edit .fields {
+  display: grid;
+  grid-template-columns: 1.8fr 1.2fr 0.9fr;
+  gap: 16px;
+  align-items: start;
+}
+
+/* Champs */
+.page-templates-edit .field > label {
+  display: block;
+  font-size: 13px;
+  color: #9fb4d5;
+  margin-bottom: 6px;
+}
+
+.page-templates-edit input[type=text],
+.page-templates-edit select,
+.page-templates-edit textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #0b1220;
+  border: 1px solid rgba(255,255,255,.15);
+  color: #e6edf7;
+  border-radius: 8px;
+  padding: 10px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+/* Focus states “propre” */
+.page-templates-edit input[type=text]:focus,
+.page-templates-edit select:focus,
+.page-templates-edit textarea:focus {
+  border-color: #275ea6;
+  box-shadow: 0 0 0 3px rgba(39,94,166,.25);
+  outline: none;
+}
+
+/* Textarea moins “imposant” visuellement */
+.page-templates-edit textarea {
+  min-height: 240px;      /* ajustable selon préférence */
+  resize: vertical;
+  line-height: 1.45;
+}
+
+/* Placeholders (badges) */
+.page-templates-edit .placeholder-box {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255,255,255,.15);
+  background: #0f172a;
+}
+.page-templates-edit .placeholder-box .legend {
+  margin-bottom: 8px;
+  color: #9fb4d5;
+  font-size: 13px;
+}
+.page-templates-edit .placeholder-box .badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.page-templates-edit .placeholder-box .badge {
+  display: inline-block;
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.15);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #c6d3ee;
+}
+
+/* Barre d’actions en bas : cases à cocher à gauche, boutons à droite */
+.page-templates-edit .actions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255,255,255,.10);
+}
+
+.page-templates-edit .checks {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+}
+.page-templates-edit .check {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+  color: #c6d3ee;
+}
+
+.page-templates-edit .buttons {
+  display: flex;
+  gap: 10px;
+}
+
+/* Boutons (on s’aligne sur ta charte existante, avec variantes propres) */
+.page-templates-edit .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: transform .06s ease, filter .12s ease, border-color .12s ease;
+  user-select: none;
+}
+.page-templates-edit .btn.primary { background:#1f6feb; border-color:#275ea6; color:#fff; }
+.page-templates-edit .btn.primary:hover { filter: brightness(1.05); }
+.page-templates-edit .btn.secondary { background:transparent; border-color:rgba(255,255,255,.25); color:#e6edf7; }
+.page-templates-edit .btn.secondary:hover { border-color:rgba(255,255,255,.35); }
+.page-templates-edit .btn.ghost { background:transparent; color:#c7d2fe; }
+.page-templates-edit .btn:active { transform: translateY(1px); }
+
+/* Responsive */
+@media (max-width: 1100px) {
+  .page-templates-edit .form-card {
+    max-width: 92%;
+    margin: 24px auto 48px;
+  }
+  .page-templates-edit .fields {
+    grid-template-columns: 1fr;   /* empile sur mobile */
+  }
+  .page-templates-edit .actions-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .page-templates-edit .buttons { justify-content: flex-end; }
+}

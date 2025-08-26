@@ -1,7 +1,7 @@
 {
   "event": "failed.sale",
   "sale": {
-    "id": "STALETTT8F0VPAZJBL5K",
+    "id": "STATTTLTTTEL5KT",
     "amount": {
       "raw": 4900,
       "value": 4900,
@@ -11,7 +11,7 @@
     },
     "original_amount": {
       "raw": 4900,
-      "value": 4900,
+      "value": 9000,
       "formatted": "F CFA 4,900",
       "short": "4.9K",
       "currency": "XOF"
@@ -42,15 +42,15 @@
       }
     },
     "status": "completed",
-    "created_at": "2025-08-19T11:03:02.000000Z",
+    "created_at": "2025-08-19T11:05:02.000000Z",
     "custom_fields": null,
     "completed_at": null,
     "abandoned_at": null,
     "failed_at": "2025-08-19T11:25:12.000000Z"
   },
   "product": {
-    "id": "prd_k3eyyy",
-    "name": "Microsoft Office 365 – Licence À Vie - Sans abonnement",
+    "id": "prd_81pjig",
+    "name": "Licence à Vie , Microsoft 365 9k",
     "url": "https://digitechhub.store/office-365-a-vie",
     "price": {
       "raw": 15000,

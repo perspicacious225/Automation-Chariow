@@ -12,6 +12,9 @@ from webhook_app.utils.database import (
     rfm_recompute,ensure_templates_schema
 )
 
+from flask_login import LoginManager
+from webhook_app.utils.auth import ensure_users_schema, get_user_by_id
+
 
 from webhook_app.config import Config
 from webhook_app.services.notifier import Notifier
@@ -28,6 +31,21 @@ def create_app():
     # Flask app
     app = Flask(__name__)
     CORS(app, resources={r"/webhook": {"origins": "*"}})
+    app.config.from_object(Config)
+    assert app.config.get("SECRET_KEY"), "SECRET_KEY requis pour les sessions !"
+
+    ensure_users_schema()
+     # Flask-Login
+    login_manager = LoginManager()
+    login_manager.login_view = "auth.login"      # redirige si non connecté
+    login_manager.session_protection = "strong"
+    login_manager.init_app(app)
+    @login_manager.user_loader
+    def load_user(user_id: str):
+        return get_user_by_id(user_id)
+
+    from webhook_app.auth.routes import auth_bp
+    app.register_blueprint(auth_bp)
 
     # Services
     notifier = Notifier()
