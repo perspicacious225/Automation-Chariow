@@ -1,5 +1,5 @@
 # webhook_app/utils/auth.py
-import sqlite3
+import sqlite3, time
 from dataclasses import dataclass
 from typing import Optional
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -8,7 +8,15 @@ from webhook_app.config import Config
 
 # ---------- DB ----------
 def _conn():
-    return sqlite3.connect(Config.DB_PATH)
+    # timeout: le driver attend jusqu’à 30s avant de lever "database is locked"
+    # check_same_thread: utile si un thread (scheduler) partage la connexion
+    conn = sqlite3.connect(Config.DB_PATH, timeout=30, check_same_thread=False)
+    # Pragmas pour réduire les blocages et accélérer les commits
+    conn.execute("PRAGMA journal_mode=WAL;")       # journal WAL = meilleure concurrence R/W
+    conn.execute("PRAGMA synchronous=NORMAL;")     # fsync moins agressif
+    conn.execute("PRAGMA busy_timeout=30000;")     # (doublon côté driver) au cas où
+    conn.execute("PRAGMA foreign_keys=ON;")
+    return conn
 
 def ensure_users_schema():
     conn = _conn()
@@ -78,21 +86,33 @@ def get_user_by_email(email: str) -> Optional[User]:
         conn.close()
 
 def create_user(email: str, password: str, *, is_admin: bool=False) -> User:
-    email_norm = (email or "").strip().lower()
+    email_norm = email.strip().lower()
     pwd_hash = generate_password_hash(password)
-    # Premier compte => admin automatiquement
+    # premier compte => admin automatiquement
     if users_count() == 0:
         is_admin = True
-    conn = _conn()
-    try:
-        with conn:
-            conn.execute(
-                "INSERT INTO users(email, password_hash, is_admin) VALUES (?,?,?)",
-                (email_norm, pwd_hash, 1 if is_admin else 0)
-            )
-        return get_user_by_email(email_norm)
-    finally:
-        conn.close()
+
+    for attempt in range(5): 
+        conn = _conn()
+        try:
+            with conn:
+                conn.execute(
+                    "INSERT INTO users(email, password_hash, is_admin) VALUES (?,?,?)",
+                    (email_norm, pwd_hash, 1 if is_admin else 0)
+                )
+            # relire l’utilisateur inséré
+            return get_user_by_email(email_norm)
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "locked" in msg or "busy" in msg:
+                time.sleep(0.2 * (2 ** attempt))
+                continue
+            raise
+        finally:
+            conn.close()
+
+    
+    raise RuntimeError("Base de données occupée, réessayez dans un instant.")
 
 def verify_password(user: User, password: str) -> bool:
     return check_password_hash(user.password_hash, password)
