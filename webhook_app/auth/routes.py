@@ -1,5 +1,5 @@
 # webhook_app/auth/routes.py
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from webhook_app.utils.auth import (
     ensure_users_schema, users_count,
@@ -13,9 +13,16 @@ auth_bp = Blueprint(
     template_folder="templates" 
 )
 
-@auth_bp.before_app_first_request
-def _ensure_schema_once():
-    ensure_users_schema()
+@auth_bp.record_once
+def _init_users_schema(state):
+    """Appelé une seule fois quand le blueprint est enregistré."""
+    app = state.app
+    with app.app_context():
+        try:
+            ensure_users_schema()
+            app.logger.info("users schema ensured (auth)")
+        except Exception:
+            app.logger.exception("ensure_users_schema failed")
 
 @auth_bp.route("/register", methods=["GET", "POST"])
 def register():
