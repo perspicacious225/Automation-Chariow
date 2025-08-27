@@ -54,7 +54,7 @@ class Notifier:
 
     def _product_key(self, sale: Sale) -> str:
         if getattr(sale, "product_id", None):
-            return _slug(sale.product_id)
+            return sale.product_id
         name = sale.product_name or ""
         store = sale.store_name or ""
         return f"{_slug(name)}|{_slug(store)}" or "unknown-product"

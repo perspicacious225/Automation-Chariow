@@ -9,9 +9,9 @@ from webhook_app.utils.database import (
     ensure_schema_for_notifications, ensure_schema_for_scheduled,
     ensure_notification_log_columns, ensure_scheduled_contact_columns,
     ensure_fact_dims_schema, upsert_fact_from_webhook,
-    rfm_recompute,ensure_templates_schema
+    rfm_recompute,ensure_templates_schema,
 )
-
+from webhook_app.utils.migrations import ensure_fact_sales_failed_at
 from flask_login import LoginManager
 from webhook_app.utils.auth import ensure_users_schema, get_user_by_id
 
@@ -58,6 +58,7 @@ def create_app():
     ensure_schema_for_notifications()       # base notification_log
     ensure_notification_log_columns()       # ajoute recipient_email/phone/contact_key/product_id + index
     ensure_schema_for_webhooks()            # archive webhooks
+    ensure_fact_sales_failed_at()
     ensure_fact_dims_schema()
     ensure_templates_schema()               
 

@@ -1,7 +1,7 @@
 {
   "event": "failed.sale",
   "sale": {
-    "id": "STATTTLTTTEL5KT",
+    "id": "STALTTTTTTTTETTTTT",
     "amount": {
       "raw": 4900,
       "value": 4900,
@@ -41,15 +41,15 @@
         "currency": "XOF"
       }
     },
-    "status": "completed",
-    "created_at": "2025-08-19T11:05:02.000000Z",
+    "status": "failed",
+    "created_at": "2025-08-27T00:03:02.000000Z",
     "custom_fields": null,
-    "completed_at": null,
+    "completed_at": "2025-08-27T02:20:12.000000Z",
     "abandoned_at": null,
-    "failed_at": "2025-08-19T11:25:12.000000Z"
+    "failed_at": null
   },
   "product": {
-    "id": "prd_81pjig",
+    "id": "prd_81p_1",
     "name": "Licence à Vie , Microsoft 365 9k",
     "url": "https://digitechhub.store/office-365-a-vie",
     "price": {

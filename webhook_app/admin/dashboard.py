@@ -28,8 +28,13 @@ def admin_required(fn):
 
 
 def _conn():
-    # PRUDENT: active row_factory au besoin dans chaque route
-    return sqlite3.connect(Config.DB_PATH)
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    # robustesse
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    return conn
+
 
 def _scalar(conn, sql, params=()):
     cur = conn.execute(sql, params)
@@ -46,282 +51,316 @@ def _rows(conn, sql, params=()):
 #   ROUTES API / JSON 
 # ------------------------------ 
 @dashboard_bp.route("/metrics.json")
-@login_required  # ou @admin_required si tu veux restreindre aux admins
+@login_required
 def metrics_json():
+    import time
+    now_s  = int(time.time())
+    day_s  = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','start of day') AS INTEGER)"))
+    yday_s = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','start of day','-1 day') AS INTEGER)"))
+    d7_s   = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','-7 day') AS INTEGER)"))
+    d30_s  = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','-30 day') AS INTEGER)"))
+
     conn = _conn()
     try:
-        data = {}
+        data = {
+            "pending_due": 0, "pending_future": 0, "relance_customer_pending_count": 0,
+            "sent_24h_email": 0, "sent_24h_whatsapp": 0, "errors_24h": 0, "cadences_active": 0,
+            "gmv_1d": 0.0, "gmv_yday": 0.0, "gmv_7d": 0.0, "orders_7d": 0, "orders_1d": 0, "aov_7d": 0.0,
+            "abandoned_24h": 0, "failed_24h": 0,
+            "recovered_orders_7d": 0, "recovered_gmv_7d": 0.0, "ab_failed_7d": 0, "recovered_rate_7d": 0.0,
+            "conversions_by_step_7d": [], "top_products_7d": [], "countries_7d": []
+            }
 
-        # ----------------------
-        # Scheduled / Notifications
-        # ----------------------
-        data["sent_due"] = _scalar(conn, """
+
+        # pending dues / futures / customers pending
+        data["pending_due"] = _scalar(conn, """
             SELECT COUNT(*) FROM scheduled_notifications
-            WHERE sent_at IS NOT NULL
-              AND due_at <= CAST(strftime('%s','now') AS INTEGER)
-        """)
+            WHERE sent_at IS NULL
+            AND CAST(strftime('%s', due_at) AS INTEGER) <= ?
+        """, (now_s,))
 
         data["pending_future"] = _scalar(conn, """
             SELECT COUNT(*) FROM scheduled_notifications
             WHERE sent_at IS NULL
-              AND due_at > CAST(strftime('%s','now') AS INTEGER)
-        """)
+            AND CAST(strftime('%s', due_at) AS INTEGER) > ?
+        """, (now_s,))
 
         data["relance_customer_pending_count"] = _scalar(conn, """
             SELECT COUNT(DISTINCT sale_id) FROM scheduled_notifications
             WHERE sent_at IS NULL
-              AND due_at > CAST(strftime('%s','now') AS INTEGER)
-        """)
+            AND CAST(strftime('%s', due_at) AS INTEGER) > ?
+        """, (now_s,))
 
-        # Envois 24h par canal
+        # Envois 24h
+        data24_from = now_s - 24*3600
         sent24 = _rows(conn, """
-            SELECT channel, COUNT(*) AS cnt
-            FROM notification_log
-            WHERE sent_at >= CAST(strftime('%s','now','-1 day') AS INTEGER)
-            GROUP BY channel
-        """)
-        sent24 = {r["channel"]: r["cnt"] for r in sent24}
-        data["sent_24h_email"]    = sent24.get("email", 0)
-        data["sent_24h_whatsapp"] = sent24.get("whatsapp", 0)
+        SELECT channel, COUNT(*) AS cnt
+        FROM notification_log
+        WHERE CAST(strftime('%s', sent_at) AS INTEGER) >= ?
+        GROUP BY channel
+        """, (data24_from,))
 
-        # Erreurs 24h & cadences actives
+        sent24_map = {r["channel"]: r["cnt"] for r in sent24}
+        data["sent_24h_email"]    = int(sent24_map.get("email", 0))
+        data["sent_24h_whatsapp"] = int(sent24_map.get("whatsapp", 0))
+
+
+        # Erreurs 24h
         data["errors_24h"] = _scalar(conn, """
             SELECT COUNT(*) FROM scheduled_notifications
             WHERE error IS NOT NULL
-              AND sent_at >= CAST(strftime('%s','now','-1 day') AS INTEGER)
-        """)
+            AND CAST(strftime('%s', sent_at) AS INTEGER) >= ?
+        """, (data24_from,))
+
+
         data["cadences_active"] = _scalar(conn, """
             SELECT COUNT(DISTINCT COALESCE(contact_key,'')||'|'||COALESCE(product_id,''))
             FROM scheduled_notifications
             WHERE sent_at IS NULL
         """)
 
-        # ----------------------
-        # Sales (epoch seconds)
-        # ----------------------
-
-        # Aujourd’hui (00:00 → maintenant)
+        # ---------- Sales (epoch en base) ----------
         data["gmv_1d"] = _scalar(conn, """
             SELECT COALESCE(SUM(amount_value*0.85),0)
             FROM fact_sales
             WHERE status='completed'
-              AND COALESCE(completed_at, created_at) >= CAST(strftime('%s','now','start of day') AS INTEGER)
-        """)
+              AND COALESCE(completed_at,created_at) >= ?
+        """, (day_s,))
 
-        # Hier (00:00 → 24:00)
-        data["gmv__1d"] = _scalar(conn, """
+        data["gmv_yday"] = _scalar(conn, """
             SELECT COALESCE(SUM(amount_value*0.85),0)
             FROM fact_sales
             WHERE status='completed'
-              AND COALESCE(completed_at, created_at) >= CAST(strftime('%s','now','start of day','-1 day') AS INTEGER)
-              AND COALESCE(completed_at, created_at) <  CAST(strftime('%s','now','start of day') AS INTEGER)
-        """)
+              AND COALESCE(completed_at,created_at) >= ?
+              AND COALESCE(completed_at,created_at) <  ?
+        """, (yday_s, day_s))
 
-        # 7 derniers jours (roulants, maintenant-7j → maintenant)
         data["gmv_7d"] = _scalar(conn, """
             SELECT COALESCE(SUM(amount_value*0.85),0)
             FROM fact_sales
             WHERE status='completed'
-              AND COALESCE(completed_at, created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
-        """)
+              AND COALESCE(completed_at,created_at) >= ?
+        """, (d7_s,))
 
         data["orders_7d"] = _scalar(conn, """
-            SELECT COUNT(*)
-            FROM fact_sales
+            SELECT COUNT(*) FROM fact_sales
             WHERE status='completed'
-              AND COALESCE(completed_at, created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
-        """)
+              AND COALESCE(completed_at,created_at) >= ?
+        """, (d7_s,))
 
         data["orders_1d"] = _scalar(conn, """
-            SELECT COUNT(*)
-            FROM fact_sales
+            SELECT COUNT(*) FROM fact_sales
             WHERE status='completed'
-              AND COALESCE(completed_at, created_at) >= CAST(strftime('%s','now','start of day') AS INTEGER)
-        """)
+              AND COALESCE(completed_at,created_at) >= ?
+        """, (day_s,))
 
         data["aov_7d"] = (data["gmv_7d"] / data["orders_7d"]) if data["orders_7d"] else 0.0
 
-        # Abandons / Failed "aujourd’hui" (minuit → maintenant)
         data["abandoned_24h"] = _scalar(conn, """
             SELECT COUNT(*) FROM fact_sales
             WHERE status='abandoned'
-              AND COALESCE(abandoned_at, created_at) >= CAST(strftime('%s','now','start of day') AS INTEGER)
-        """)
+              AND COALESCE(abandoned_at,created_at) >= ?
+        """, (day_s,))
+
         data["failed_24h"] = _scalar(conn, """
             SELECT COUNT(*) FROM fact_sales
             WHERE status='failed'
-              AND COALESCE(created_at, completed_at) >= CAST(strftime('%s','now','start of day') AS INTEGER)
-        """)
+              AND COALESCE(failed_at, created_at) >= ?
+        """, (day_s,))
 
-        # Recovered 7j (orders + GMV) — fenêtre de 72h après abandon
-        data["recovered_orders_7d"] = _scalar(conn, """
+        # ---------- Recovered 7j (72h + preuve de relance) ----------
+        # Compare nl.sent_at en epoch aussi → (CASE …) BETWEEN ab.last_ab AND co.t
+        data["recovered_orders_7d"] = _scalar(conn, f"""
             WITH ab AS (
               SELECT product_id, contact_key,
-                     MAX(COALESCE(abandoned_at,created_at)) AS last_ab
+                     MAX(COALESCE(abandoned_at, failed_at, created_at)) AS last_ab
               FROM fact_sales
               WHERE status IN ('abandoned','failed')
-                AND COALESCE(abandoned_at,created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
+                AND COALESCE(abandoned_at, failed_at, created_at) >= ?
+                AND product_id IS NOT NULL AND contact_key IS NOT NULL
               GROUP BY product_id, contact_key
             ),
             co AS (
               SELECT sale_id, amount_value,
-                     COALESCE(completed_at,created_at) AS t,
+                     COALESCE(completed_at, created_at) AS t,
                      product_id, contact_key
               FROM fact_sales
               WHERE status='completed'
-                AND COALESCE(completed_at,created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
+                AND COALESCE(completed_at, created_at) >= ?
+                AND product_id IS NOT NULL AND contact_key IS NOT NULL
             )
             SELECT COUNT(*)
-            FROM co JOIN ab USING(product_id,contact_key)
+            FROM co
+            JOIN ab USING(product_id, contact_key)
             WHERE co.t BETWEEN ab.last_ab AND (ab.last_ab + 72*3600)
-        """)
+              AND EXISTS (
+                SELECT 1
+                FROM notification_log nl
+                WHERE nl.product_id  = co.product_id
+                  AND nl.contact_key = co.contact_key
+                  AND nl.template_type LIKE 'relance_%'
+                  AND (CASE WHEN typeof(nl.sent_at)='text'
+                            THEN CAST(strftime('%s',nl.sent_at) AS INTEGER)
+                            ELSE nl.sent_at END)
+                      BETWEEN ab.last_ab AND co.t
+              )
+        """, (d7_s, d7_s))
 
-        data["recovered_gmv_7d"] = _scalar(conn, """
+        data["recovered_gmv_7d"] = _scalar(conn, f"""
             WITH ab AS (
               SELECT product_id, contact_key,
-                     MAX(COALESCE(abandoned_at,created_at)) AS last_ab
+                     MAX(COALESCE(abandoned_at, failed_at, created_at)) AS last_ab
               FROM fact_sales
               WHERE status IN ('abandoned','failed')
-                AND COALESCE(abandoned_at,created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
+                AND COALESCE(abandoned_at, failed_at, created_at) >= ?
+                AND product_id IS NOT NULL AND contact_key IS NOT NULL
               GROUP BY product_id, contact_key
             ),
             co AS (
               SELECT sale_id, amount_value,
-                     COALESCE(completed_at,created_at) AS t,
+                     COALESCE(completed_at, created_at) AS t,
                      product_id, contact_key
               FROM fact_sales
               WHERE status='completed'
-                AND COALESCE(completed_at,created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
+                AND COALESCE(completed_at, created_at) >= ?
+                AND product_id IS NOT NULL AND contact_key IS NOT NULL
             )
-            SELECT COALESCE(SUM(co.amount_value * 0.85),0)
-            FROM co JOIN ab USING(product_id,contact_key)
+            SELECT COALESCE(SUM(co.amount_value*0.85),0)
+            FROM co
+            JOIN ab USING(product_id, contact_key)
             WHERE co.t BETWEEN ab.last_ab AND (ab.last_ab + 72*3600)
-        """)
+              AND EXISTS (
+                SELECT 1
+                FROM notification_log nl
+                WHERE nl.product_id  = co.product_id
+                  AND nl.contact_key = co.contact_key
+                  AND nl.template_type LIKE 'relance_%'
+                  AND (CASE WHEN typeof(nl.sent_at)='text'
+                            THEN CAST(strftime('%s',nl.sent_at) AS INTEGER)
+                            ELSE nl.sent_at END)
+                      BETWEEN ab.last_ab AND co.t
+              )
+        """, (d7_s, d7_s))
 
         data["ab_failed_7d"] = _scalar(conn, """
-            SELECT COUNT(*)
-            FROM fact_sales
+            SELECT COUNT(*) FROM fact_sales
             WHERE status IN ('abandoned','failed')
-              AND COALESCE(abandoned_at,created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
-        """)
+              AND COALESCE(abandoned_at, failed_at, created_at) >= ?
+        """, (d7_s,))
         data["recovered_rate_7d"] = (data["recovered_orders_7d"] / data["ab_failed_7d"]) if data["ab_failed_7d"] else 0.0
 
-        # Conversions par step (dernière relance avant la vente)
-        conv_by_step = _rows(conn, """
+        # ---------- Conversions par step (bornes mixtes aussi) ----------
+        data["conversions_by_step_7d"] = _rows(conn, f"""
             WITH co AS (
               SELECT sale_id, product_id, contact_key,
                      COALESCE(completed_at,created_at) AS completed_at,
-                     amount_value
+                     amount_value 
               FROM fact_sales
               WHERE status='completed'
-                AND COALESCE(completed_at,created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
+                AND COALESCE(completed_at,created_at) >= ?
             ),
             lastrel AS (
-              SELECT nl.contact_key, nl.product_id, nl.template_type, nl.sent_at
-              FROM notification_log nl
-              WHERE nl.template_type LIKE 'relance_%'
+              SELECT contact_key, product_id, template_type,
+                     -- on convertit sent_at en epoch pour la comparaison
+                     (CASE WHEN typeof(sent_at)='text'
+                           THEN CAST(strftime('%s',sent_at) AS INTEGER)
+                           ELSE sent_at END) AS sent_epoch
+              FROM notification_log
+              WHERE template_type LIKE 'relance_%'
+            ),
+            x AS (
+              SELECT c.sale_id,
+                     (
+                       SELECT lr.template_type
+                       FROM lastrel lr
+                       WHERE lr.contact_key = c.contact_key
+                         AND lr.product_id  = c.product_id
+                         AND lr.sent_epoch <= c.completed_at
+                       ORDER BY lr.sent_epoch DESC
+                       LIMIT 1
+                     ) AS template_type
+              FROM co c
             )
             SELECT x.template_type AS step,
                    COUNT(*) AS conv,
-                   COALESCE(SUM(co.amount_value),0) AS gmv
-            FROM (
-              SELECT c.sale_id,
-                     (SELECT lr.template_type
-                      FROM lastrel lr
-                      WHERE lr.contact_key=c.contact_key
-                        AND lr.product_id=c.product_id
-                        AND lr.sent_at <= c.completed_at
-                      ORDER BY lr.sent_at DESC
-                      LIMIT 1) AS template_type
-              FROM co c
-            ) x
-            JOIN fact_sales co ON co.sale_id = x.sale_id
+                   COALESCE(SUM(c.amount_value *0.85 ),0) AS gmv
+            FROM x
+            JOIN co c ON c.sale_id = x.sale_id
             WHERE x.template_type IS NOT NULL
             GROUP BY x.template_type
             ORDER BY x.template_type
-        """)
-        data["conversions_by_step_7d"] = conv_by_step
+        """, (d7_s,))
 
-        # A/B split (envois par arm)
-        data["ab_sent_7d"] = _rows(conn, """
-            SELECT ab_arm, COUNT(*) AS cnt
-            FROM notification_log
-            WHERE sent_at >= CAST(strftime('%s','now','-7 day') AS INTEGER)
-            GROUP BY ab_arm
-        """)
-
-        # Segmentation RFM (vue globale)
-        data["rfm_segments"] = _rows(conn, """
-            SELECT rfm_segment AS segment,
-                   COUNT(*) AS customers,
-                   COALESCE(SUM(gmv_total * 0.85),0) AS gmv
-            FROM dim_customer
-            GROUP BY rfm_segment
-            ORDER BY gmv DESC
-        """)
-
-        # Top produits & pays (7j)
+        # ---------- Tops ----------
         data["top_products_7d"] = _rows(conn, """
             SELECT COALESCE(product_id,'(n/a)') AS product_id,
                    COUNT(*) AS orders,
-                   COALESCE(SUM(amount_value * 0.85),0) AS gmv
+                   COALESCE(SUM(amount_value*0.85),0) AS gmv
             FROM fact_sales
             WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
+              AND COALESCE(completed_at,created_at) >= ?
             GROUP BY COALESCE(product_id,'(n/a)')
             ORDER BY gmv DESC
             LIMIT 5
-        """)
+        """, (d7_s,))
+
         data["countries_7d"] = _rows(conn, """
             SELECT COALESCE(country,'(n/a)') AS country,
                    COUNT(*) AS orders,
-                   COALESCE(SUM(amount_value * 0.85),0) AS gmv
+                   COALESCE(SUM(amount_value*0.85),0) AS gmv
             FROM fact_sales
             WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= CAST(strftime('%s','now','-7 day') AS INTEGER)
+              AND COALESCE(completed_at,created_at) >= ?
             GROUP BY COALESCE(country,'(n/a)')
             ORDER BY gmv DESC
             LIMIT 5
-        """)
+        """, (d7_s,))
 
         return jsonify(data)
     finally:
         conn.close()
-
 @dashboard_bp.route("/ts.json")
 @login_required
 def ts_json():
+    import time
+    d30_s = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','-30 day') AS INTEGER)"))
     conn = _conn()
     try:
         rows = _rows(conn, """
-          SELECT strftime('%Y-%m-%d', COALESCE(completed_at,created_at)) AS d,
-                 SUM(CASE WHEN status='completed' THEN amount_value ELSE 0 END) AS gmv,
-                 SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS orders,
-                 SUM(CASE WHEN status='abandoned' THEN 1 ELSE 0 END) AS abandoned
+          SELECT
+            strftime('%Y-%m-%d', COALESCE(completed_at,created_at), 'unixepoch') AS d,
+            SUM(CASE WHEN status='completed' THEN amount_value*0.85 ELSE 0 END) AS gmv,
+            SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END)               AS orders,
+            SUM(CASE WHEN status IN ('abandoned','failed') THEN 1 ELSE 0 END)  AS abandoned
           FROM fact_sales
-          WHERE COALESCE(created_at, completed_at) >= datetime('now','-30 day')
-          GROUP BY strftime('%Y-%m-%d', COALESCE(completed_at,created_at))
-          ORDER BY d
-        """)
+          WHERE COALESCE(created_at, completed_at) >= ?
+          GROUP BY 1
+          ORDER BY 1
+        """, (d30_s,))
         return jsonify(rows)
     finally:
         conn.close()
 
-
 @dashboard_bp.route("/heatmap.json")
 @login_required
 def heatmap_json():
+    import time
+    d30_s = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','-30 day') AS INTEGER)"))
     conn = _conn()
     try:
         rows = _rows(conn, """
           SELECT dow, hour_of_day, COUNT(*) AS cnt
           FROM fact_sales
-          WHERE status='completed' AND COALESCE(completed_at,created_at) >= datetime('now','-30 day')
+          WHERE status='completed'
+            AND COALESCE(completed_at,created_at) >= ?
           GROUP BY dow, hour_of_day
-        """)
+        """, (d30_s,))
         return jsonify(rows)
     finally:
         conn.close()
+
+
+
 
 
 @dashboard_bp.route("/export.csv")

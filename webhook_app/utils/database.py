@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from webhook_app.config import Config
@@ -80,6 +81,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_notif ON notification_log(sale_id, channel,
 CREATE INDEX IF NOT EXISTS idx_notification_log_recipient ON notification_log(recipient);
 CREATE INDEX IF NOT EXISTS idx_log_contact_product_time ON notification_log(contact_key, product_id, sent_at);
 """
+
 
 def ensure_schema_for_notifications():
     conn = sqlite3.connect(Config.DB_PATH)
@@ -340,13 +342,41 @@ class Database:
     def mark_notified(self, sale_id: str, channel: str, template_type: str, recipient: str | None = None, *,
                       recipient_email: str | None = None, recipient_phone: str | None = None,
                       contact_key: str | None = None, product_id: str | None = None, ab_arm: str | None = None):
+        sent_epoch = int(time.time())
         with self._get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Backfill depuis fact_sales si meta manquante/mal formée
+            row = conn.execute(
+                "SELECT product_id, contact_key, email, phone FROM fact_sales WHERE sale_id=? LIMIT 1",
+                (sale_id,)
+            ).fetchone()
+            if row:
+                fs_pid = (row["product_id"] or "").strip()
+                fs_ck  = (row["contact_key"] or "").strip() or None
+                # corrige tirets -> underscore quand nécessaire
+                if fs_pid and "-" in fs_pid:
+                    fs_pid = fs_pid.replace("-", "_")
+
+                if not product_id or product_id != fs_pid:
+                    product_id = fs_pid or product_id
+                if not contact_key:
+                    contact_key = fs_ck
+                if not recipient_email:
+                    recipient_email = (row["email"] or None)
+                if not recipient_phone:
+                    recipient_phone = (row["phone"] or None)
+
+            # On écrit sent_at en epoch pour simplifier toutes les requêtes
             conn.execute("""
                 INSERT OR IGNORE INTO notification_log
-                (sale_id, channel, template_type, recipient, recipient_email, recipient_phone, contact_key, product_id, ab_arm)
-                VALUES (?,?,?,?,?,?,?,?,?)
-            """, (sale_id, channel, template_type, recipient, recipient_email, recipient_phone, contact_key, product_id, ab_arm))
+                (sale_id, channel, template_type, recipient, recipient_email, recipient_phone,
+                 contact_key, product_id, ab_arm, sent_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (sale_id, channel, template_type, recipient, recipient_email, recipient_phone,
+                  contact_key, product_id, ab_arm, sent_epoch))
             conn.commit()
+
 
 # ---------- FACT & DIM (ETL KPI) ----------
 FACT_SALES_SQL = """
@@ -366,6 +396,7 @@ CREATE TABLE IF NOT EXISTS fact_sales (
   created_at DATETIME,
   completed_at DATETIME,
   abandoned_at DATETIME,
+  failed_at DATETIME,
   time_to_complete_min REAL,
   hour_of_day INTEGER,
   dow INTEGER,
@@ -377,6 +408,7 @@ CREATE TABLE IF NOT EXISTS fact_sales (
 );
 CREATE INDEX IF NOT EXISTS idx_fact_created ON fact_sales(created_at);
 CREATE INDEX IF NOT EXISTS idx_fact_contact_prod ON fact_sales(contact_key, product_id);
+CREATE INDEX IF NOT EXISTS idx_fact_failed ON fact_sales(status, failed_at);
 """
 
 DIM_CUSTOMER_SQL = """
@@ -439,15 +471,23 @@ def _get_utm(custom_fields):
         pass
     return src, med, camp
 
-def _norm_ts(ts: str | None) -> str | None:
-    if not ts:
+def _to_epoch(val):
+
+    if not val:
         return None
-    ts = ts.replace("T", " ").replace("Z", "")
+    if isinstance(val, (int, float)):
+        return int(val)
+    s = str(val).strip()
     try:
-        dt = datetime.datetime.fromisoformat(ts)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
+        if s.endswith('Z'):
+            s = s[:-1] + '+00:00'
+        return int(datetime.datetime.fromisoformat(s).timestamp())
     except Exception:
-        return ts.split(".")[0] if "." in ts else ts
+        try:
+            return int(float(s))
+        except Exception:
+            return None
+
 
 def upsert_fact_from_webhook(payload: dict):
     s    = payload.get("sale", {}) or {}
@@ -456,140 +496,169 @@ def upsert_fact_from_webhook(payload: dict):
     store= payload.get("store", {}) or {}
 
     sale_id = str(s.get("id") or "")
-    status  = str(s.get("status") or "")
-    amount  = float((s.get("amount") or {}).get("value") or 0.0)
-    currency= (s.get("amount") or {}).get("currency") or None
+    status  = (s.get("status") or "").strip().lower()
 
-    created_raw   = s.get("created_at")
-    completed_raw = s.get("completed_at")
-    abandoned_raw = s.get("abandoned_at")
+    amount   = float((s.get("amount") or {}).get("value") or 0.0)
+    currency = (s.get("amount") or {}).get("currency") or (prod.get("price") or {}).get("currency")
 
-    created   = _norm_ts(created_raw)
-    completed = _norm_ts(completed_raw)
-    abandoned = _norm_ts(abandoned_raw)
+    # --- timestamps en EPOCH (INTEGER) ---
+    created   = _to_epoch(s.get("created_at"))
+    completed = _to_epoch(s.get("completed_at"))
+    abandoned = _to_epoch(s.get("abandoned_at"))
+    failed    = _to_epoch(s.get("failed_at"))
 
-    # Fallback utile : si completed absent mais status='completed', on prend created
+    # fallbacks sains
     if status == "completed" and not completed:
         completed = created
+    if status == "failed" and not failed:
+        # si la source n'envoie pas failed_at, prends le meilleur proxy
+        failed = s.get("failed_at") and _to_epoch(s.get("failed_at")) or abandoned or completed or created
 
     product_id   = prod.get("id") or None
     product_name = prod.get("name") or None
     store_id     = store.get("id") or None
     store_name   = store.get("name") or None
 
-    email = cust.get("email") or None
-    phone = cust.get("phone") or None
+    email   = cust.get("email") or None
+    phone   = cust.get("phone") or None
     country = cust.get("country") or None
     contact = _contact_key(email, phone)
 
-    try:
-        ttc_min = None
-        if created and completed:
-            dtc = datetime.datetime.fromisoformat(completed) - datetime.datetime.fromisoformat(created)
-            ttc_min = round(dtc.total_seconds()/60.0, 2)
-    except Exception:
-        ttc_min = None
-
-    try:
-        dt = datetime.datetime.fromisoformat(completed or created) if (completed or created) else None
-        hod = dt.hour if dt else None
-        dow = dt.weekday() if dt else None  # 0=Mon
-        month = dt.strftime("%Y-%m") if dt else None
-    except Exception:
-        hod = dow = None
-        month = None
+    # dérivés
+    ttc_min = round((completed - created)/60.0, 2) if (created and completed) else None
+    t_ref = completed or abandoned or failed or created
+    if t_ref:
+        dt = datetime.datetime.utcfromtimestamp(t_ref)
+        hod = dt.hour
+        dow = dt.weekday()       # 0 = lundirf
+        month = dt.strftime("%Y-%m")
+    else:
+        hod = dow = month = None
 
     utm_source, utm_medium, utm_campaign = _get_utm(s.get("custom_fields"))
     price_tier = _price_tier(amount)
 
     conn = sqlite3.connect(Config.DB_PATH)
     try:
-        # FACT upsert
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+
+        # FACT upsert (note l’ajout de failed_at + COALESCE pour ne pas écraser)
         conn.execute("""
-        INSERT INTO fact_sales (sale_id,status,amount_value,currency,product_id,product_name,store_id,store_name,
-                                contact_key,email,phone,country,created_at,completed_at,abandoned_at,
-                                time_to_complete_min,hour_of_day,dow,month,utm_source,utm_medium,utm_campaign,price_tier)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO fact_sales (
+          sale_id, status, amount_value, currency,
+          product_id, product_name, store_id, store_name,
+          contact_key, email, phone, country,
+          created_at, completed_at, abandoned_at, failed_at,
+          time_to_complete_min, hour_of_day, dow, month,
+          utm_source, utm_medium, utm_campaign, price_tier
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(sale_id) DO UPDATE SET
-          status=excluded.status,
-          amount_value=excluded.amount_value,
-          currency=excluded.currency,
-          product_id=excluded.product_id,
-          product_name=excluded.product_name,
-          store_id=excluded.store_id,
-          store_name=excluded.store_name,
-          contact_key=excluded.contact_key,
-          email=excluded.email,
-          phone=excluded.phone,
-          country=excluded.country,
-          created_at=excluded.created_at,
-          completed_at=excluded.completed_at,
-          abandoned_at=excluded.abandoned_at,
-          time_to_complete_min=excluded.time_to_complete_min,
-          hour_of_day=excluded.hour_of_day,
-          dow=excluded.dow,
-          month=excluded.month,
-          utm_source=excluded.utm_source,
-          utm_medium=excluded.utm_medium,
-          utm_campaign=excluded.utm_campaign,
-          price_tier=excluded.price_tier
-        """, (sale_id,status,amount,currency,product_id,product_name,store_id,store_name,
-              contact,email,phone,country,created,completed,abandoned,
-              ttc_min,hod,dow,month,utm_source,utm_medium,utm_campaign,price_tier))
+          status       = excluded.status,
+          amount_value = COALESCE(excluded.amount_value, fact_sales.amount_value),
+          currency     = COALESCE(excluded.currency,     fact_sales.currency),
+          product_id   = COALESCE(excluded.product_id,   fact_sales.product_id),
+          product_name = COALESCE(excluded.product_name, fact_sales.product_name),
+          store_id     = COALESCE(excluded.store_id,     fact_sales.store_id),
+          store_name   = COALESCE(excluded.store_name,   fact_sales.store_name),
+          contact_key  = COALESCE(excluded.contact_key,  fact_sales.contact_key),
+          email        = COALESCE(excluded.email,        fact_sales.email),
+          phone        = COALESCE(excluded.phone,        fact_sales.phone),
+          country      = COALESCE(excluded.country,      fact_sales.country),
+
+          created_at   = COALESCE(fact_sales.created_at,   excluded.created_at),
+          completed_at = COALESCE(excluded.completed_at,   fact_sales.completed_at),
+          abandoned_at = COALESCE(excluded.abandoned_at,   fact_sales.abandoned_at),
+          failed_at    = COALESCE(excluded.failed_at,      fact_sales.failed_at),
+
+          time_to_complete_min = COALESCE(excluded.time_to_complete_min, fact_sales.time_to_complete_min),
+          hour_of_day  = COALESCE(excluded.hour_of_day,  fact_sales.hour_of_day),
+          dow          = COALESCE(excluded.dow,          fact_sales.dow),
+          month        = COALESCE(excluded.month,        fact_sales.month),
+
+          utm_source   = COALESCE(excluded.utm_source,   fact_sales.utm_source),
+          utm_medium   = COALESCE(excluded.utm_medium,   fact_sales.utm_medium),
+          utm_campaign = COALESCE(excluded.utm_campaign, fact_sales.utm_campaign),
+          price_tier   = COALESCE(excluded.price_tier,   fact_sales.price_tier)
+        """, (
+            sale_id, status, amount, currency,
+            product_id, product_name, store_id, store_name,
+            contact, email, phone, country,
+            created, completed, abandoned, failed,
+            ttc_min, hod, dow, month,
+            utm_source, utm_medium, utm_campaign, price_tier
+        ))
 
         # DIM Product
         if product_id:
+            first_seen_iso = (
+                datetime.datetime.utcfromtimestamp(created).strftime("%Y-%m-%d %H:%M:%S")
+                if created else datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            )
             conn.execute("""
             INSERT INTO dim_product(product_id, product_name, first_seen)
             VALUES (?,?,?)
             ON CONFLICT(product_id) DO UPDATE SET product_name=excluded.product_name
-            """, (product_id, product_name, created or datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")))
+            """, (product_id, product_name, first_seen_iso))
 
-        # DIM Customer (first_seen/last_seen + counters recalculés via rfm_recompute)
+        # DIM Customer
         if contact:
+            now_iso = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            first_iso = datetime.datetime.utcfromtimestamp(created).strftime("%Y-%m-%d %H:%M:%S") if created else now_iso
+            last_iso  = datetime.datetime.utcfromtimestamp(completed or created).strftime("%Y-%m-%d %H:%M:%S") if (completed or created) else now_iso
             conn.execute("""
             INSERT INTO dim_customer(contact_key, first_seen, last_seen, country)
             VALUES (?,?,?,?)
             ON CONFLICT(contact_key) DO NOTHING
-            """, (contact, created or datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                  completed or created or datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                  country))
+            """, (contact, first_iso, last_iso, country))
+
         conn.commit()
     finally:
         conn.close()
 
 def rfm_recompute():
-    """Recalcule R/F/M + segment et met à jour dim_customer."""
+    """Recalcule R/F/M + segment et met à jour dim_customer (colonnes *_at en epoch)."""
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        cur = conn.execute("""
-        SELECT contact_key,
-               MIN(COALESCE(created_at, completed_at)) AS first_seen,
-               MAX(COALESCE(completed_at, created_at)) AS last_seen,
-               COUNT(CASE WHEN status='completed' THEN 1 END) AS orders_count,
-               COALESCE(SUM(CASE WHEN status='completed' THEN amount_value END),0) AS gmv_total
-        FROM fact_sales
-        WHERE contact_key IS NOT NULL
-        GROUP BY contact_key
-        """)
-        rows = cur.fetchall()
+        rows = conn.execute("""
+            SELECT contact_key,
+                   MIN(COALESCE(created_at, completed_at)) AS first_seen,
+                   MAX(COALESCE(completed_at, created_at)) AS last_seen,
+                   COUNT(CASE WHEN status='completed' THEN 1 END) AS orders_count,
+                   COALESCE(SUM(CASE WHEN status='completed' THEN amount_value END),0) AS gmv_total
+            FROM fact_sales
+            WHERE contact_key IS NOT NULL
+            GROUP BY contact_key
+        """).fetchall()
+
         now = datetime.datetime.utcnow()
+
+        def _as_dt_epoch(val):
+            if val is None: return None
+            try:
+                return datetime.datetime.utcfromtimestamp(int(val))
+            except Exception:
+                # backstop si base partiellement en texte
+                try:
+                    return datetime.datetime.fromisoformat(str(val))
+                except Exception:
+                    return None
 
         rec_days, freqs, mons, tmp = [], [], [], []
         for r in rows:
-            last_seen = r["last_seen"]
-            last_dt = datetime.datetime.fromisoformat(last_seen) if last_seen else now
-            recency_days = (now - last_dt).total_seconds()/86400.0
-            freq = r["orders_count"] or 0
-            mon = r["gmv_total"] or 0.0
+            fs_dt = _as_dt_epoch(r["first_seen"]) or now
+            ls_dt = _as_dt_epoch(r["last_seen"]) or now
+            recency_days = (now - ls_dt).total_seconds()/86400.0
+            freq = int(r["orders_count"] or 0)
+            mon  = float(r["gmv_total"] or 0)
             rec_days.append(recency_days); freqs.append(freq); mons.append(mon)
-            tmp.append((r["contact_key"], recency_days, freq, mon, r["first_seen"], r["last_seen"]))
+            tmp.append((r["contact_key"], recency_days, freq, mon, fs_dt, ls_dt))
 
         def _quantiles(vals):
             if not vals: return (0,0,0,0)
             vs = sorted(vals)
-            def q(p):
+            def q(p): 
                 i = max(0, min(len(vs)-1, int(round(p*(len(vs)-1)))))
                 return vs[i]
             return (q(0.2), q(0.4), q(0.6), q(0.8))
@@ -597,43 +666,37 @@ def rfm_recompute():
         rq, fq, mq = _quantiles(rec_days), _quantiles(freqs), _quantiles(mons)
 
         def score_recency(d):
-            if d <= rq[0]: return 5
-            if d <= rq[1]: return 4
-            if d <= rq[2]: return 3
-            if d <= rq[3]: return 2
-            return 1
+            return 5 if d <= rq[0] else 4 if d <= rq[1] else 3 if d <= rq[2] else 2 if d <= rq[3] else 1
 
         def score_quantile(x, qs):
-            if x <= qs[0]: return 1
-            if x <= qs[1]: return 2
-            if x <= qs[2]: return 3
-            if x <= qs[3]: return 4
-            return 5
+            return 1 if x <= qs[0] else 2 if x <= qs[1] else 3 if x <= qs[2] else 4 if x <= qs[3] else 5
 
         def seg(r,f,m):
             if r>=4 and f>=4 and m>=4: return "Champions"
-            if r>=4 and f>=3: return "Fidèles"
+            if r>=4 and f>=3:          return "Fidèles"
             if r>=3 and f>=2 and m>=3: return "Prometteurs"
-            if r<=2 and f>=3: return "À réactiver"
+            if r<=2 and f>=3:          return "À réactiver"
             if r<=2 and f<=2 and m<=2: return "À risque"
             return "Standard"
 
-        for ck, rd, fqv, mv, fs, ls in tmp:
+        for ck, rd, fqv, mv, fs_dt, ls_dt in tmp:
             r = score_recency(rd); f = score_quantile(fqv, fq); m = score_quantile(mv, mq)
-            segment = seg(r,f,m)
+            first_iso = fs_dt.strftime("%Y-%m-%d %H:%M:%S")
+            last_iso  = ls_dt.strftime("%Y-%m-%d %H:%M:%S")
             conn.execute("""
-            INSERT INTO dim_customer(contact_key, first_seen, last_seen, country, orders_count, gmv_total, rfm_recency_days, rfm_frequency, rfm_monetary, rfm_segment)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(contact_key) DO UPDATE SET
-              first_seen=excluded.first_seen,
-              last_seen=excluded.last_seen,
-              orders_count=excluded.orders_count,
-              gmv_total=excluded.gmv_total,
-              rfm_recency_days=excluded.rfm_recency_days,
-              rfm_frequency=excluded.rfm_frequency,
-              rfm_monetary=excluded.rfm_monetary,
-              rfm_segment=excluded.rfm_segment
-            """, (ck, fs, ls, None, int(fqv), float(mv), float(rd), float(f), float(m), segment))
+              INSERT INTO dim_customer(contact_key, first_seen, last_seen, country, orders_count, gmv_total,
+                                       rfm_recency_days, rfm_frequency, rfm_monetary, rfm_segment)
+              VALUES (?,?,?,?,?,?,?,?,?,?)
+              ON CONFLICT(contact_key) DO UPDATE SET
+                first_seen=excluded.first_seen,
+                last_seen=excluded.last_seen,
+                orders_count=excluded.orders_count,
+                gmv_total=excluded.gmv_total,
+                rfm_recency_days=excluded.rfm_recency_days,
+                rfm_frequency=excluded.rfm_frequency,
+                rfm_monetary=excluded.rfm_monetary,
+                rfm_segment=excluded.rfm_segment
+            """, (ck, first_iso, last_iso, None, int(fqv), float(mv), float(rd), float(f), float(m), seg(r,f,m)))
         conn.commit()
     finally:
         conn.close()
@@ -699,9 +762,6 @@ def has_recent_contact_product_notification(email: str, phone: str, product_id: 
 
 
 #--------------------------------------------------------- templates setings
-# --- À mettre dans webhook_app/utils/database.py (ajouter ces fonctions ou remplacer les versions existantes) ---
-# import sqlite3
-# from webhook_app.config import Config
 
 def ensure_templates_schema():
     """

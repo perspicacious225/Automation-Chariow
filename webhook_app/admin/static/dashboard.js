@@ -12,7 +12,7 @@
   const pct = (x)=> (x*100).toFixed(1)+'%';
   k.innerHTML = `
     <div class="card"><div class="muted">GMV 1j</div><div class="kpi">${(m.gmv_1d||0).toFixed(0)}</div></div>
-    <div class="card"><div class="muted">GMV Hier</div><div class="kpi">${(m.gmv_prev_1d||0).toFixed(0)}</div></div>
+    <div class="card"><div class="muted">GMV Hier</div><div class="kpi">${(m.gmv_yday||0).toFixed(0)}</div></div>
     <div class="card"><div class="muted">Commandes 1j</div><div class="kpi">${m.orders_1d||0}</div></div>
     <div class="card"><div class="muted">GMV 7j</div><div class="kpi">${(m.gmv_7d||0).toFixed(0)}</div></div>
     <div class="card"><div class="muted">Commandes 7j</div><div class="kpi">${m.orders_7d||0}</div></div>
