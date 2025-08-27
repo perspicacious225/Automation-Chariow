@@ -58,8 +58,8 @@ def create_app():
     ensure_schema_for_notifications()       # base notification_log
     ensure_notification_log_columns()       # ajoute recipient_email/phone/contact_key/product_id + index
     ensure_schema_for_webhooks()            # archive webhooks
-    ensure_fact_sales_failed_at()
     ensure_fact_dims_schema()
+    ensure_fact_sales_failed_at()
     ensure_templates_schema()               
 
 
