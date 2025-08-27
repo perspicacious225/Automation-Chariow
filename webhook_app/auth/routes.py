@@ -10,12 +10,11 @@ auth_bp = Blueprint(
     "auth",
     __name__,
     url_prefix="/auth",
-    template_folder="templates"  # ex: webhook_app/auth/templates/auth/login.html
+    template_folder="templates" 
 )
 
-@auth_bp.before_app_request
-def _ensure_schema():
-    # S'assure que la table users existe
+@auth_bp.before_app_first_request
+def _ensure_schema_once():
     ensure_users_schema()
 
 @auth_bp.route("/register", methods=["GET", "POST"])

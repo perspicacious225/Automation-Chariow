@@ -1,23 +1,39 @@
 # webhook_app/utils/auth.py
-import sqlite3, time
+import sqlite3, time, os
 from dataclasses import dataclass
 from typing import Optional
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import UserMixin
 from webhook_app.config import Config
 
+
 # ---------- DB ----------
 def _conn():
-    # timeout: le driver attend jusqu’à 30s avant de lever "database is locked"
-    # check_same_thread: utile si un thread (scheduler) partage la connexion
-    conn = sqlite3.connect(Config.DB_PATH, timeout=30, check_same_thread=False)
-    # Pragmas pour réduire les blocages et accélérer les commits
-    conn.execute("PRAGMA journal_mode=WAL;")       # journal WAL = meilleure concurrence R/W
-    conn.execute("PRAGMA synchronous=NORMAL;")     # fsync moins agressif
-    conn.execute("PRAGMA busy_timeout=30000;")     # (doublon côté driver) au cas où
-    conn.execute("PRAGMA foreign_keys=ON;")
-    return conn
+    # S'assure que le dossier existe et est inscriptible
+    db_dir = os.path.dirname(Config.DB_PATH or "")
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
 
+    # timeout + thread-safety classique
+    conn = sqlite3.connect(Config.DB_PATH, timeout=10, check_same_thread=False)
+
+    # Toujours utile
+    try:
+        conn.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
+
+    # Sur Render, WAL peut échouer -> on tente, puis fallback en DELETE
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except sqlite3.OperationalError:
+        try:
+            conn.execute("PRAGMA journal_mode=DELETE;")
+        except Exception:
+            # Si même ça échoue, on laisse le mode par défaut
+            pass
+
+    return conn
 def ensure_users_schema():
     conn = _conn()
     try:

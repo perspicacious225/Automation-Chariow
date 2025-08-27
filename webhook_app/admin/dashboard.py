@@ -28,11 +28,30 @@ def admin_required(fn):
 
 
 def _conn():
-    conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    # robustesse
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=5000;")
+    # S'assure que le dossier existe et est inscriptible
+    db_dir = os.path.dirname(Config.DB_PATH or "")
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    # timeout + thread-safety classique
+    conn = sqlite3.connect(Config.DB_PATH, timeout=10, check_same_thread=False)
+
+    # Toujours utile
+    try:
+        conn.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
+
+    # Sur Render, WAL peut échouer -> on tente, puis fallback en DELETE
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except sqlite3.OperationalError:
+        try:
+            conn.execute("PRAGMA journal_mode=DELETE;")
+        except Exception:
+            # Si même ça échoue, on laisse le mode par défaut
+            pass
+
     return conn
 
 
