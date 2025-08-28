@@ -45,7 +45,7 @@ class WhatsAppService:
         """
         return cls._normalize_digits(phone)
 
-    # OPTIONNEL : si tu veux, tu peux aussi réécrire normalize_phone pour réutiliser _normalize_digits:
+
     @classmethod
     def normalize_phone(cls, phone: str) -> Optional[str]:
         digits = cls._normalize_digits(phone)

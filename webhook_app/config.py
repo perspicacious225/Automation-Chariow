@@ -102,7 +102,7 @@ RELANCE_DELAYS = {
 # ===== A/B test des timings =====
 RELANCE_DELAYS_A = RELANCE_DELAYS  # bras contrôle
 RELANCE_DELAYS_B = {
-    "t30": 5,       # minutes
+    "t30": 1,       # minutes
     "t6h": 4*60,
     "t23h": 18*60,
     "t47h": 36*60,

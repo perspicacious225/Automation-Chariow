@@ -82,12 +82,12 @@ def metrics_json():
     conn = _conn()
     try:
         data = {
-            "pending_due": 0, "pending_future": 0, "relance_customer_pending_count": 0,
-            "sent_24h_email": 0, "sent_24h_whatsapp": 0, "errors_24h": 0, "cadences_active": 0,
-            "gmv_1d": 0.0, "gmv_yday": 0.0, "gmv_7d": 0.0, "orders_7d": 0, "orders_1d": 0, "aov_7d": 0.0,
-            "abandoned_24h": 0, "failed_24h": 0,
-            "recovered_orders_7d": 0, "recovered_gmv_7d": 0.0, "ab_failed_7d": 0, "recovered_rate_7d": 0.0,
-            "conversions_by_step_7d": [], "top_products_7d": [], "countries_7d": []
+            # "pending_due": 0, "pending_future": 0, "relance_customer_pending_count": 0,
+            # "sent_24h_email": 0, "sent_24h_whatsapp": 0, "errors_24h": 0, "cadences_active": 0,
+            # "gmv_1d": 0.0, "gmv_yday": 0.0, "gmv_7d": 0.0, "orders_7d": 0, "orders_1d": 0, "aov_7d": 0.0,
+            # "abandoned_24h": 0, "failed_24h": 0,
+            # "recovered_orders_7d": 0, "recovered_gmv_7d": 0.0, "ab_failed_7d": 0, "recovered_rate_7d": 0.0,
+            # "conversions_by_step_7d": [], "top_products_7d": [], "countries_7d": []
             }
 
 
@@ -112,24 +112,34 @@ def metrics_json():
 
         # Envois 24h
         data24_from = now_s - 24*3600
+
         sent24 = _rows(conn, """
         SELECT channel, COUNT(*) AS cnt
         FROM notification_log
-        WHERE CAST(strftime('%s', sent_at) AS INTEGER) >= ?
+        WHERE (
+            CASE WHEN typeof(sent_at)='text'
+                THEN CAST(strftime('%s', sent_at) AS INTEGER)
+                ELSE sent_at
+            END
+        ) >= ?
         GROUP BY channel
         """, (data24_from,))
-
         sent24_map = {r["channel"]: r["cnt"] for r in sent24}
         data["sent_24h_email"]    = int(sent24_map.get("email", 0))
         data["sent_24h_whatsapp"] = int(sent24_map.get("whatsapp", 0))
 
-
-        # Erreurs 24h
         data["errors_24h"] = _scalar(conn, """
-            SELECT COUNT(*) FROM scheduled_notifications
-            WHERE error IS NOT NULL
-            AND CAST(strftime('%s', sent_at) AS INTEGER) >= ?
+        SELECT COUNT(*)
+        FROM scheduled_notifications
+        WHERE error IS NOT NULL
+            AND (
+            CASE WHEN typeof(sent_at)='text'
+                THEN CAST(strftime('%s', sent_at) AS INTEGER)
+                ELSE sent_at
+            END
+            ) >= ?
         """, (data24_from,))
+
 
 
         data["cadences_active"] = _scalar(conn, """

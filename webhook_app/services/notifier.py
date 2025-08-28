@@ -281,7 +281,6 @@ class Notifier:
 
         return self._send_notification(sale, confirm_key)
 
-
     def schedule_relances(self, sale: Sale):
         contact_key = self._contact_key(sale)
         product_key = self._product_key(sale)
