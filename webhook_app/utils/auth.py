@@ -2,38 +2,45 @@
 import sqlite3, time, os
 from dataclasses import dataclass
 from typing import Optional
-from werkzeug.security import generate_password_hash, check_password_hash
-from flask_login import UserMixin
+from werkzeug.security import generate_password_hash, check_password_hash  # type: ignore
+from flask_login import UserMixin # type: ignore
 from webhook_app.config import Config
 
 
 # ---------- DB ----------
+
 def _conn():
     # S'assure que le dossier existe et est inscriptible
-    db_dir = os.path.dirname(Config.DB_PATH or "")
+    db_path = Config.DB_PATH
+    db_dir = os.path.dirname(db_path or "")
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
-    # timeout + thread-safety classique
-    conn = sqlite3.connect(Config.DB_PATH, timeout=10, check_same_thread=False)
+    # Ouvre la connexion (ne la réutilise pas entre threads)
+    conn = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
 
-    # Toujours utile
     try:
+        # Evite les "database is locked"
         conn.execute("PRAGMA busy_timeout=5000;")
+
+        # - PROD/Render : SQLITE_JOURNAL_MODE=DELETE
+
+        mode = os.getenv("SQLITE_JOURNAL_MODE", "DELETE").upper()
+        if mode == "WAL":
+            try:
+                conn.execute("PRAGMA journal_mode=WAL;")
+            except sqlite3.OperationalError:
+                conn.execute("PRAGMA journal_mode=DELETE;")
+        else:
+            conn.execute("PRAGMA journal_mode=DELETE;")
+
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA temp_store=MEMORY;")
     except Exception:
         pass
 
-    # Sur Render, WAL peut échouer -> on tente, puis fallback en DELETE
-    try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-    except sqlite3.OperationalError:
-        try:
-            conn.execute("PRAGMA journal_mode=DELETE;")
-        except Exception:
-            # Si même ça échoue, on laisse le mode par défaut
-            pass
-
     return conn
+
 def ensure_users_schema():
     conn = _conn()
     try:
@@ -69,7 +76,7 @@ class _UserRow:
 
 class User(UserMixin):
     def __init__(self, row: _UserRow):
-        self.id = str(row.id)                # Flask-Login attend une str
+        self.id = str(row.id)                
         self.email = row.email
         self.password_hash = row.password_hash
         self.is_admin = bool(row.is_admin)
@@ -104,7 +111,7 @@ def get_user_by_email(email: str) -> Optional[User]:
 def create_user(email: str, password: str, *, is_admin: bool=False) -> User:
     email_norm = email.strip().lower()
     pwd_hash = generate_password_hash(password)
-    # premier compte => admin automatiquement
+
     if users_count() == 0:
         is_admin = True
 
