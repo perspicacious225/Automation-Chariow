@@ -15,19 +15,18 @@ logger = logging.getLogger(__name__)
 # ======================
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.hostinger.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")                 # contact@domaine
-SMTP_PASS = os.getenv("SMTP_PASS")                 # mot de passe / app password
+SMTP_USER = os.getenv("SMTP_USER")                 
+SMTP_PASS = os.getenv("SMTP_PASS")                 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", SMTP_USER)
 SENDER_NAME = os.getenv("SENDER_NAME", "Digitech Hub")
 
-# STARTTLS par défaut (587). Si tu veux SSL 465:
-# mets SMTP_SSL=true et SMTP_PORT=465
+
 SMTP_SSL = os.getenv("SMTP_SSL", "false").lower() == "true"
 
 # ===============
 # IMAP (pour Sent)
 # ===============
-IMAP_HOST = os.getenv("IMAP_HOST", "imap.hostinger.com")   # Gmail: imap.gmail.com
+IMAP_HOST = os.getenv("IMAP_HOST", "imap.hostinger.com")  
 IMAP_PORT = int(os.getenv("IMAP_PORT", "993"))
 IMAP_USER = os.getenv("IMAP_USER", SMTP_USER)
 IMAP_PASS = os.getenv("IMAP_PASS", SMTP_PASS)
@@ -65,7 +64,7 @@ def _build_from_header() -> str:
     """Construit 'From' = 'Nom <email@domaine>'"""
     if not (SENDER_EMAIL or SMTP_USER):
         return ""
-    return formataddr((SENDER_NAME, SENDER_EMAIL or SMTP_USER))
+    return formataddr((SENDER_NAME, SENDER_EMAIL or SMTP_USER)) # type: ignore
 
 def _parse_imap_list_line(line: bytes):
     """
@@ -139,7 +138,7 @@ def _append_to_sent(raw_bytes: bytes):
         with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as imap:
             imap.login(IMAP_USER, IMAP_PASS)
             target = _find_sent_mailbox(imap)
-            imap.append(target, "\\Seen", imaplib.Time2Internaldate(time.time()), raw_bytes)
+            imap.append(target, "\\Seen", imaplib.Time2Internaldate(time.time()), raw_bytes) # type: ignore
             imap.logout()
             logger.info(f"Copie IMAP dans '{target}' OK.")
     except Exception as e:
@@ -179,14 +178,14 @@ class EmailService:
             context = ssl.create_default_context()
             if SMTP_SSL:
                 with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=30) as server:
-                    server.login(SMTP_USER, SMTP_PASS)
+                    server.login(SMTP_USER, SMTP_PASS) # type: ignore
                     server.send_message(msg, to_addrs=[recipient])
             else:
                 with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
                     server.ehlo()
                     server.starttls(context=context)
                     server.ehlo()
-                    server.login(SMTP_USER, SMTP_PASS)
+                    server.login(SMTP_USER, SMTP_PASS) # type: ignore
                     server.send_message(msg, to_addrs=[recipient])
 
             logger.info("Email envoyé à %s", recipient)
