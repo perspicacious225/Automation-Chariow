@@ -8,6 +8,9 @@ from webhook_app.config import Config
 
 
 # ---------- DB ----------
+# utils/auth.py
+import os, sqlite3
+
 
 def _conn():
     # S'assure que le dossier existe et est inscriptible
@@ -16,30 +19,22 @@ def _conn():
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
-    # Ouvre la connexion (ne la réutilise pas entre threads)
-    conn = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
+    # Ouvre la connexion
+    conn = sqlite3.connect(db_path, timeout=15, check_same_thread=False)
 
     try:
-        # Evite les "database is locked"
+        # Évite "database is locked"
         conn.execute("PRAGMA busy_timeout=5000;")
 
-        # - PROD/Render : SQLITE_JOURNAL_MODE=DELETE
-
-        mode = os.getenv("SQLITE_JOURNAL_MODE", "DELETE").upper()
-        if mode == "WAL":
-            try:
-                conn.execute("PRAGMA journal_mode=WAL;")
-            except sqlite3.OperationalError:
-                conn.execute("PRAGMA journal_mode=DELETE;")
-        else:
-            conn.execute("PRAGMA journal_mode=DELETE;")
-
+        conn.execute("PRAGMA journal_mode=DELETE;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA temp_store=MEMORY;")
+        conn.execute("PRAGMA foreign_keys=ON;")
     except Exception:
         pass
 
     return conn
+
 
 def ensure_users_schema():
     conn = _conn()

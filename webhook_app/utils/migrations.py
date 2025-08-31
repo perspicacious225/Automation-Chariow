@@ -7,18 +7,18 @@ def ensure_fact_sales_failed_at():
     # S'assure que le dossier existe
     os.makedirs(os.path.dirname(Config.DB_PATH), exist_ok=True)
 
-    conn = sqlite3.connect(Config.DB_PATH, timeout=10)
+    conn = sqlite3.connect(Config.DB_PATH, timeout=15, check_same_thread=False)
     try:
-        # PRAGMA en best-effort (ne jamais faire planter le déploiement ici)
+
         try:
+            # Évite "database is locked"
             conn.execute("PRAGMA busy_timeout=5000;")
-            # WAL si possible, sinon on ignore tranquillement
-            mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
-            if (mode or "").lower() != "wal":
-                try:
-                    conn.execute("PRAGMA journal_mode=WAL;")
-                except sqlite3.OperationalError:
-                    pass
+            conn.execute("PRAGMA journal_mode=DELETE;")
+     
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA temp_store=MEMORY;")
+         
+            conn.execute("PRAGMA foreign_keys=ON;")
         except Exception:
             pass
 
