@@ -11,6 +11,14 @@ from webhook_app.models.sale import Sale
 
 logger = logging.getLogger(__name__)
 
+# def _build_sale_from_payload(payload_json) -> Sale:
+#     data = json.loads(payload_json)
+#     if isinstance(data, dict) and "sale" in data:
+#         return Sale.from_webhook(data)
+#     if isinstance(data, dict):
+#         return Sale.from_webhook({"sale": data})
+#     raise ValueError("payload_json doit être un objet JSON")
+
 def _build_sale_from_payload(payload_json: str) -> Sale:
     data = json.loads(payload_json)
     if "id" in data and "status" in data:

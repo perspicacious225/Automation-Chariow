@@ -79,66 +79,56 @@ def metrics_json():
 
     conn = _conn()
     try:
-        data = {
-            # "pending_due": 0, "pending_future": 0, "relance_customer_pending_count": 0,
-            # "sent_24h_email": 0, "sent_24h_whatsapp": 0, "errors_24h": 0, "cadences_active": 0,
-            # "gmv_1d": 0.0, "gmv_yday": 0.0, "gmv_7d": 0.0, "orders_7d": 0, "orders_1d": 0, "aov_7d": 0.0,
-            # "abandoned_24h": 0, "failed_24h": 0,
-            # "recovered_orders_7d": 0, "recovered_gmv_7d": 0.0, "ab_failed_7d": 0, "recovered_rate_7d": 0.0,
-            # "conversions_by_step_7d": [], "top_products_7d": [], "countries_7d": []
-            }
-
+        data = {}
 
         # pending dues / futures / customers pending
         data["pending_due"] = _scalar(conn, """
             SELECT COUNT(*) FROM scheduled_notifications
             WHERE sent_at IS NULL
-            AND CAST(strftime('%s', due_at) AS INTEGER) <= ?
+              AND due_at <= ?
         """, (now_s,))
 
         data["pending_future"] = _scalar(conn, """
             SELECT COUNT(*) FROM scheduled_notifications
             WHERE sent_at IS NULL
-            AND CAST(strftime('%s', due_at) AS INTEGER) > ?
+              AND due_at > ?
         """, (now_s,))
 
         data["relance_customer_pending_count"] = _scalar(conn, """
             SELECT COUNT(DISTINCT sale_id) FROM scheduled_notifications
             WHERE sent_at IS NULL
-            AND CAST(strftime('%s', due_at) AS INTEGER) > ?
+              AND due_at > ?
         """, (now_s,))
 
         # Envois 24h
         data24_from = now_s - 24*3600
 
         sent24 = _rows(conn, """
-        SELECT channel, COUNT(*) AS cnt
-        FROM notification_log
-        WHERE (
-            CASE WHEN typeof(sent_at)='text'
-                THEN CAST(strftime('%s', sent_at) AS INTEGER)
-                ELSE sent_at
-            END
-        ) >= ?
-        GROUP BY channel
+            SELECT channel, COUNT(*) AS cnt
+            FROM notification_log
+            WHERE (
+                CASE WHEN typeof(sent_at)='text'
+                     THEN CAST(strftime('%s', sent_at) AS INTEGER)
+                     ELSE sent_at
+                END
+            ) >= ?
+            GROUP BY channel
         """, (data24_from,))
         sent24_map = {r["channel"]: r["cnt"] for r in sent24}
         data["sent_24h_email"]    = int(sent24_map.get("email", 0))
         data["sent_24h_whatsapp"] = int(sent24_map.get("whatsapp", 0))
 
         data["errors_24h"] = _scalar(conn, """
-        SELECT COUNT(*)
-        FROM scheduled_notifications
-        WHERE error IS NOT NULL
-            AND (
-            CASE WHEN typeof(sent_at)='text'
-                THEN CAST(strftime('%s', sent_at) AS INTEGER)
-                ELSE sent_at
-            END
-            ) >= ?
+            SELECT COUNT(*)
+            FROM scheduled_notifications
+            WHERE error IS NOT NULL
+              AND (
+                CASE WHEN typeof(sent_at)='text'
+                     THEN CAST(strftime('%s', sent_at) AS INTEGER)
+                     ELSE sent_at
+                END
+              ) >= ?
         """, (data24_from,))
-
-
 
         data["cadences_active"] = _scalar(conn, """
             SELECT COUNT(DISTINCT COALESCE(contact_key,'')||'|'||COALESCE(product_id,''))
@@ -147,6 +137,7 @@ def metrics_json():
         """)
 
         # ---------- Sales (epoch en base) ----------
+        # (On laisse les métriques générales telles quelles pour l’instant)
         data["gmv_1d"] = _scalar(conn, """
             SELECT COALESCE(SUM(amount_value*0.85),0)
             FROM fact_sales
@@ -183,37 +174,38 @@ def metrics_json():
 
         data["aov_7d"] = (data["gmv_7d"] / data["orders_7d"]) if data["orders_7d"] else 0.0
 
+        # ---------- KPI 24h corrigés (bornes strictes) ----------
         data["abandoned_24h"] = _scalar(conn, """
             SELECT COUNT(*) FROM fact_sales
             WHERE status='abandoned'
-              AND COALESCE(abandoned_at,created_at) >= ?
+              AND abandoned_at >= ?
         """, (day_s,))
 
         data["failed_24h"] = _scalar(conn, """
             SELECT COUNT(*) FROM fact_sales
             WHERE status='failed'
-              AND COALESCE(failed_at, created_at) >= ?
+              AND failed_at >= ?
         """, (day_s,))
 
         # ---------- Recovered 7j (72h + preuve de relance) ----------
-        # Compare nl.sent_at en epoch aussi → (CASE …) BETWEEN ab.last_ab AND co.t
         data["recovered_orders_7d"] = _scalar(conn, f"""
             WITH ab AS (
               SELECT product_id, contact_key,
-                     MAX(COALESCE(abandoned_at, failed_at, created_at)) AS last_ab
+                     MAX(COALESCE(abandoned_at, failed_at)) AS last_ab
               FROM fact_sales
               WHERE status IN ('abandoned','failed')
-                AND COALESCE(abandoned_at, failed_at, created_at) >= ?
+                AND COALESCE(abandoned_at, failed_at) >= ?
                 AND product_id IS NOT NULL AND contact_key IS NOT NULL
               GROUP BY product_id, contact_key
             ),
             co AS (
               SELECT sale_id, amount_value,
-                     COALESCE(completed_at, created_at) AS t,
+                     completed_at AS t,
                      product_id, contact_key
               FROM fact_sales
               WHERE status='completed'
-                AND COALESCE(completed_at, created_at) >= ?
+                AND completed_at >= ?
+                AND completed_at IS NOT NULL
                 AND product_id IS NOT NULL AND contact_key IS NOT NULL
             )
             SELECT COUNT(*)
@@ -236,20 +228,21 @@ def metrics_json():
         data["recovered_gmv_7d"] = _scalar(conn, f"""
             WITH ab AS (
               SELECT product_id, contact_key,
-                     MAX(COALESCE(abandoned_at, failed_at, created_at)) AS last_ab
+                     MAX(COALESCE(abandoned_at, failed_at)) AS last_ab
               FROM fact_sales
               WHERE status IN ('abandoned','failed')
-                AND COALESCE(abandoned_at, failed_at, created_at) >= ?
+                AND COALESCE(abandoned_at, failed_at) >= ?
                 AND product_id IS NOT NULL AND contact_key IS NOT NULL
               GROUP BY product_id, contact_key
             ),
             co AS (
               SELECT sale_id, amount_value,
-                     COALESCE(completed_at, created_at) AS t,
+                     completed_at AS t,
                      product_id, contact_key
               FROM fact_sales
               WHERE status='completed'
-                AND COALESCE(completed_at, created_at) >= ?
+                AND completed_at >= ?
+                AND completed_at IS NOT NULL
                 AND product_id IS NOT NULL AND contact_key IS NOT NULL
             )
             SELECT COALESCE(SUM(co.amount_value*0.85),0)
@@ -272,11 +265,11 @@ def metrics_json():
         data["ab_failed_7d"] = _scalar(conn, """
             SELECT COUNT(*) FROM fact_sales
             WHERE status IN ('abandoned','failed')
-              AND COALESCE(abandoned_at, failed_at, created_at) >= ?
+              AND COALESCE(abandoned_at, failed_at) >= ?
         """, (d7_s,))
         data["recovered_rate_7d"] = (data["recovered_orders_7d"] / data["ab_failed_7d"]) if data["ab_failed_7d"] else 0.0
 
-        # ---------- Conversions par step (bornes mixtes aussi) ----------
+        # ---------- Conversions par step (inchangé pour l’instant) ----------
         data["conversions_by_step_7d"] = _rows(conn, f"""
             WITH co AS (
               SELECT sale_id, product_id, contact_key,
@@ -288,7 +281,6 @@ def metrics_json():
             ),
             lastrel AS (
               SELECT contact_key, product_id, template_type,
-                     -- on convertit sent_at en epoch pour la comparaison
                      (CASE WHEN typeof(sent_at)='text'
                            THEN CAST(strftime('%s',sent_at) AS INTEGER)
                            ELSE sent_at END) AS sent_epoch
@@ -318,7 +310,7 @@ def metrics_json():
             ORDER BY x.template_type
         """, (d7_s,))
 
-        # ---------- Tops ----------
+        # ---------- Tops (inchangé pour l’instant) ----------
         data["top_products_7d"] = _rows(conn, """
             SELECT COALESCE(product_id,'(n/a)') AS product_id,
                    COUNT(*) AS orders,
@@ -346,6 +338,7 @@ def metrics_json():
         return jsonify(data)
     finally:
         conn.close()
+
 @dashboard_bp.route("/ts.json")
 @login_required
 def ts_json():

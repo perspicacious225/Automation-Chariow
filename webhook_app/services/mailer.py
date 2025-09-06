@@ -199,3 +199,5 @@ class EmailService:
         except Exception as e:
             logger.error("Erreur SMTP/IMAP: %s", e, exc_info=True)
         return False
+
+

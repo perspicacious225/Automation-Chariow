@@ -1,56 +1,80 @@
 {
-  "event": "successful.sale",
+  "event": "failed.sale",
   "sale": {
-    "id": "testtt_sale_hrbwyx8ohbah",
+    "id": "STALTTTTTttTTTTTTETTTTT",
     "amount": {
-      "raw": 9999,
-      "value": 9999,
-      "formatted": "9 999 $US",
-      "short": "10.0K",
-      "currency": "USD"
+      "raw": 4900,
+      "value": 4900,
+      "formatted": "F CFA 4,900",
+      "short": "4.9K",
+      "currency": "XOF"
     },
-    "status": "abandoned",
-    "custom_fields": [
-      {
-        "name": "test_key",
-        "value": "test_value"
+    "original_amount": {
+      "raw": 4900,
+      "value": 9000,
+      "formatted": "F CFA 4,900",
+      "short": "4.9K",
+      "currency": "XOF"
+    },
+    "discount_amount": {
+      "raw": 0,
+      "value": 0,
+      "formatted": "F CFA 0",
+      "short": "0",
+      "currency": "XOF"
+    },
+    "settlement": {
+      "amount": {
+        "raw": null,
+        "value": null,
+        "formatted": null,
+        "short": null,
+        "currency": "XOF"
       },
-      {
-        "name": "test_key_2",
-        "value": "test_value_2"
+      "due_at": null,
+      "done_at": null,
+      "service_fee": {
+        "raw": null,
+        "value": null,
+        "formatted": null,
+        "short": null,
+        "currency": "XOF"
       }
-    ],
-    "created_at": "2025-08-28T00:16:00.909791Z",
-    "completed_at": null,
-    "abandoned_at": "2025-08-28T00:17:50.909823Z"
+    },
+    "status": "completed",
+    "created_at": "2025-09-04T16:00:02.000000Z",
+    "custom_fields": null,
+    "completed_at": "2025-09-04T17:30:12.000000Z",
+    "abandoned_at": null,
+    "failed_at": null
   },
   "product": {
-    "id": "test_product_ux186gyn28td",
-    "name": "Test Product",
-    "url": "https://example.com/test-product",
+    "id": "prd_k3eyyy",
+    "name": "Licence à Vie , Microsoft 365 9k",
+    "url": "https://digitechhub.store/office-365-a-vie",
     "price": {
-      "raw": 9999,
-      "value": 9999,
-      "formatted": "9 999 $US",
-      "short": "10.0K",
-      "currency": "USD"
+      "raw": 15000,
+      "value": 15000,
+      "formatted": "F CFA 15,000",
+      "short": "15.0K",
+      "currency": "XOF"
     }
   },
   "customer": {
-    "id": "test_customer_lm6ywbzwlqx4",
-    "name": "John Doe",
-    "first_name": "John",
-    "last_name": "Doe",
+    "id": "cus_uqu1g4b1",
+    "name": "Allassane Sawadogo",
+    "first_name": "Allassane",
+    "last_name": "Sawadogo",
     "email": "perspicaciousnicko@gmail.com",
     "phone": "2250789333113",
-    "country": "US",
-    "created_at": "2025-08-27T00:04:50.909888Z"
+    "country": "CI"
   },
   "store": {
     "id": "store_4jy5h5ggl4fu",
     "name": "Digitech Hub",
-    "url": "https://digitechhub.store",
-    "created_at": "2025-05-04T13:12:44.000000Z"
+    "url": "https://digitechhub.store"
   },
-  "note": "This is a test sale for pulse testing."
+  "checkout": {
+    "url": "https://digitechhub.store/prd_k3eyyy/checkout?first_name=Allassane&last_name=Sawadogo&email=kranov8994%40gmail.com&country=CI&phone=0748030049"
+  }
 }

@@ -2,7 +2,9 @@ import logging, os, re, unicodedata, hashlib, datetime
 from webhook_app.models.sale import Sale
 from webhook_app.templates import messages
 from webhook_app.templates.messages import render_email_with_brand
-from .mailer import EmailService, to_plain
+from .mailer import  to_plain
+from .gmail_api_sender import EmailService
+
 from .whatsapp import WhatsAppService
 from webhook_app.config import Config, RELANCE_DELAYS, RELANCE_DELAYS_A, RELANCE_DELAYS_B, WHATSAPP_AND_EMAIL_ALWAYS
 from webhook_app.utils.database import (
@@ -59,7 +61,6 @@ class Notifier:
         store = sale.store_name or ""
         return f"{_slug(name)}|{_slug(store)}" or "unknown-product"
     
-
     def _extract_prices(self, sale):
         """
         Utilise directement les champs de Sale :
@@ -128,8 +129,6 @@ class Notifier:
             return self.db.has_notified_recipient(recipient_norm or "", channel, t, self.window_days)
         
         return self.db.has_notified(sale.id, channel, t)
-
-
 
 
     # ========= Envoi =========
@@ -300,24 +299,24 @@ class Notifier:
             return True
 
         # Anti-spam fenêtre
+        email_norm = norm_email(sale.customer_email)
         try:
             phone_norm = self.whatsapp_service.normalize_for_dedupe(sale.customer_phone)
         except Exception:
             phone_norm = sale.customer_phone
-        if has_recent_contact_product_notification(sale.customer_email, phone_norm, product_key, Config.NOTIFY_DEDUPE_WINDOW_MINUTES):
+        if has_recent_contact_product_notification(email_norm, phone_norm, product_key, Config.NOTIFY_DEDUPE_WINDOW_MINUTES):
             logger.info("Skip planif (dedupe fenetre) contact=%s prod=%s", contact_key, product_key)
             return True
 
         # planification
-        base = datetime.datetime.utcnow()
+        base_epoch = int(datetime.datetime.utcnow().timestamp())
         sale_snapshot = self._sale_snapshot(sale)
         for key in ["t30","t6h","t23h","t47h"]:
             minutes = delays[key]
-            due = base + datetime.timedelta(minutes=minutes)
-            due_str = due.isoformat(sep=" ", timespec="seconds")  # format SQLite
+            due_epoch = base_epoch + minutes*60
             template_key = f"relance_{key}"
             enqueue_notification(
-                sale.id, template_key, due_str, {"sale": sale_snapshot},
+                sale.id, template_key, due_epoch, {"sale": sale_snapshot},
                 contact_key=contact_key, product_id=product_key, ab_arm=ab_arm
             )
         return True
@@ -328,6 +327,6 @@ class Notifier:
             id=sale.id, status=sale.status, product_name=sale.product_name, product_id=sale.product_id,
             customer_first_name=sale.customer_first_name, customer_phone=sale.customer_phone, customer_country=sale.customer_country,
             customer_email=sale.customer_email, store_name=sale.store_name, store_url=sale.store_url,
-            checkout_url=sale.checkout_url, amount=sale.amount, created_at=sale.created_at,
+            checkout_url=sale.checkout_url, amount=sale.amount, created_at=sale.created_at,abandoned_at=sale.abandoned_at, failed_at=sale.failed_at, completed_at=sale.completed_at,
             product_value=sale.product_value, current_year=sale.current_year, currency=cur
         )

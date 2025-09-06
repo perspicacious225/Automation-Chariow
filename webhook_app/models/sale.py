@@ -16,9 +16,13 @@ class Sale:
     checkout_url: str
     amount: str
     created_at: str
+    abandoned_at: str
+    failed_at: str
+    completed_at: str
     product_value: str
     current_year:str
     currency: str
+
 
     @classmethod
     def from_webhook(cls, payload: Dict[str, Any]) -> 'Sale':
@@ -37,9 +41,12 @@ class Sale:
             checkout_url=payload.get("checkout", {}).get("url"),
             amount=sale.get("amount", {}).get("value"),
             currency=sale.get("amount", {}).get("currency"),
-            created_at=sale.get("created_at", "").split("T")[0],
+            created_at=sale.get("created_at"),
+            failed_at=sale.get("failed_at"),
+            abandoned_at=sale.get("abandoned_at"),
+            completed_at=sale.get("completed_at"),
+            current_year=(sale.get("created_at","")[:4] or ""),
             product_value=payload.get("product", {}).get("price", {}).get("value"),
-            current_year=sale.get("created_at", "").split("T")[0].split("-")[0]
         )
     
 

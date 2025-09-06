@@ -179,30 +179,49 @@ def ensure_scheduled_contact_columns():
     finally:
         conn.close()
 
-def enqueue_notification(sale_id: str, template_type: str, due_at_iso: str, payload: dict, *,
-                         contact_key: str | None = None, product_id: str | None = None, ab_arm: str | None = None):
+def enqueue_notification(
+    sale_id: str,
+    template_type: str,
+    due_at,                            
+    payload: dict,
+    *,
+    contact_key: str | None = None,
+    product_id: str | None = None,
+    ab_arm: str | None = None
+):
+    due_epoch = _to_epoch(due_at)
     conn = sqlite3.connect(Config.DB_PATH)
     try:
         conn.execute(
-            "INSERT OR IGNORE INTO scheduled_notifications(sale_id, template_type, due_at, payload_json, contact_key, product_id, ab_arm) VALUES (?,?,?,?,?,?,?)",
-            (sale_id, template_type, due_at_iso, json.dumps(payload, ensure_ascii=False), contact_key, product_id, ab_arm)
+            """
+            INSERT OR IGNORE INTO scheduled_notifications
+              (sale_id, template_type, due_at, payload_json, contact_key, product_id, ab_arm)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (sale_id, template_type, due_epoch, json.dumps(payload, ensure_ascii=False), contact_key, product_id, ab_arm),
         )
         conn.commit()
     finally:
         conn.close()
-
 def fetch_due_scheduled(limit: int = 50):
+    now_epoch = int(time.time())
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.execute(
-            "SELECT * FROM scheduled_notifications WHERE sent_at IS NULL AND due_at <= datetime('now') ORDER BY due_at LIMIT ?",
-            (limit,)
+            """
+            SELECT *
+            FROM scheduled_notifications
+            WHERE sent_at IS NULL
+              AND due_at <= ?
+            ORDER BY due_at ASC, id ASC
+            LIMIT ?
+            """,
+            (now_epoch, limit),
         )
         return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()
-
 def mark_scheduled_sent(sched_id: int):
     conn = sqlite3.connect(Config.DB_PATH)
     try:
@@ -471,22 +490,30 @@ def _get_utm(custom_fields):
         pass
     return src, med, camp
 
-def _to_epoch(val):
-
-    if not val:
+def _to_epoch(v) -> int | None:
+    """
+    Convertit v en epoch (int, UTC).
+    - v peut être int/float (déjà epoch) ou string ISO ('YYYY-MM-DD HH:MM:SS', '...T...Z', etc.)
+    - lève ValueError si non parseable.
+    """
+    if v is None:
         return None
-    if isinstance(val, (int, float)):
-        return int(val)
-    s = str(val).strip()
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip()
+    # ISO 8601: accepte 'Z' et espace comme séparateur
     try:
-        if s.endswith('Z'):
-            s = s[:-1] + '+00:00'
-        return int(datetime.datetime.fromisoformat(s).timestamp())
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return int(dt.astimezone(timezone.utc).timestamp())
     except Exception:
-        try:
-            return int(float(s))
-        except Exception:
-            return None
+        pass
+    # Dernier recours: conversion SQLite (gère beaucoup de variantes texte)
+    with sqlite3.connect(Config.DB_PATH) as c:
+        cur = c.execute("SELECT CAST(strftime('%s', ?) AS INTEGER)", (s,))
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            return int(row[0])
+    raise ValueError(f"due_at non parseable: {v!r}")
 
 
 def upsert_fact_from_webhook(payload: dict):
