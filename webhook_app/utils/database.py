@@ -4,8 +4,59 @@ from contextlib import contextmanager
 from pathlib import Path
 from webhook_app.config import Config
 import logging, json, math, datetime
+import os
+from datetime import datetime as _dt, timezone as _tz
 
 logger = logging.getLogger(__name__)
+
+# Retries si "database is locked"
+_LOCK_RETRIES = int(os.getenv("SQLITE_LOCK_RETRIES", "8"))
+_LOCK_DELAY_S = float(os.getenv("SQLITE_LOCK_DELAY_MS", "150")) / 1000.0  # 150ms
+
+def _connect():
+    """
+    Connexion SQLite robuste (Render-friendly)
+    - WAL + busy_timeout
+    - autocommit (isolation_level=None)
+    - check_same_thread=False (scheduler en thread)
+    """
+    conn = sqlite3.connect(
+        Config.DB_PATH,
+        timeout=30,
+        isolation_level=None,        # autocommit
+        check_same_thread=False,
+        detect_types=sqlite3.PARSE_DECLTYPES,
+    )
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except sqlite3.OperationalError:
+        logger.warning("PRAGMA WAL au bootstrap a échoué (réessayera plus tard).")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    return conn
+
+def _exec_retry(conn: sqlite3.Connection, sql: str, params=()):
+    for i in range(_LOCK_RETRIES):
+        try:
+            return conn.execute(sql, params)
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                time.sleep(_LOCK_DELAY_S * (i + 1))
+                continue
+            raise
+
+def _commit_retry(conn: sqlite3.Connection):
+    for i in range(_LOCK_RETRIES):
+        try:
+            return conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                time.sleep(_LOCK_DELAY_S * (i + 1))
+                continue
+            raise
+
 
 # -------- Webhook raw events (historique) --------
 SCHEMA_SQL_WEBHOOKS = """
@@ -26,24 +77,23 @@ def _event_key_from_payload(payload: dict) -> str:
     return f"{event}:{sale_id}:{created_at}"
 
 def ensure_schema_for_webhooks():
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
         conn.executescript(SCHEMA_SQL_WEBHOOKS)
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
 
 def save_webhook_raw(payload: dict, source: str = "webhook") -> int:
     ek = _event_key_from_payload(payload)
-    conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = _connect()
     try:
-        conn.execute(
+        _exec_retry(conn,
             "INSERT OR IGNORE INTO webhook_events(event_key, event_name, payload_json) VALUES (?,?,?)",
             (ek, str(payload.get("event") or ""), json.dumps(payload, ensure_ascii=False))
         )
-        conn.commit()
-        cur = conn.execute("SELECT id FROM webhook_events WHERE event_key = ?", (ek,))
+        _commit_retry(conn)
+        cur = _exec_retry(conn, "SELECT id FROM webhook_events WHERE event_key = ? LIMIT 1", (ek,))
         row = cur.fetchone()
         return int(row["id"]) if row else 0
     except Exception:
@@ -82,12 +132,11 @@ CREATE INDEX IF NOT EXISTS idx_notification_log_recipient ON notification_log(re
 CREATE INDEX IF NOT EXISTS idx_log_contact_product_time ON notification_log(contact_key, product_id, sent_at);
 """
 
-
 def ensure_schema_for_notifications():
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
         conn.executescript(SCHEMA_SQL_NOTIFICATIONS)
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
 
@@ -95,9 +144,9 @@ def ensure_notification_log_columns():
     """
     Migration douce si la table existante n'a pas encore les colonnes enrichies.
     """
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        cur = conn.execute("PRAGMA table_info(notification_log)")
+        cur = _exec_retry(conn, "PRAGMA table_info(notification_log)")
         cols = [row[1] for row in cur.fetchall()]
 
         to_add = []
@@ -114,18 +163,18 @@ def ensure_notification_log_columns():
 
         for sql in to_add:
             try:
-                conn.execute(sql)
+                _exec_retry(conn, sql)
             except Exception:
                 pass
 
         try:
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_notif ON notification_log(sale_id, channel, template_type)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_notification_log_recipient ON notification_log(recipient)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_log_contact_product_time ON notification_log(contact_key, product_id, sent_at)")
+            _exec_retry(conn, "CREATE UNIQUE INDEX IF NOT EXISTS uq_notif ON notification_log(sale_id, channel, template_type)")
+            _exec_retry(conn, "CREATE INDEX IF NOT EXISTS idx_notification_log_recipient ON notification_log(recipient)")
+            _exec_retry(conn, "CREATE INDEX IF NOT EXISTS idx_log_contact_product_time ON notification_log(contact_key, product_id, sent_at)")
         except Exception:
             pass
 
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
 
@@ -149,21 +198,22 @@ CREATE TABLE IF NOT EXISTS scheduled_notifications (
 CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_notifications(due_at);
 CREATE INDEX IF NOT EXISTS idx_sched_contact_product_sent ON scheduled_notifications(contact_key, product_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sched_contact_product_due ON scheduled_notifications(contact_key, product_id, due_at);
+CREATE INDEX IF NOT EXISTS idx_sched_due_unsent ON scheduled_notifications(due_at) WHERE sent_at IS NULL;
 """
 
 def ensure_schema_for_scheduled():
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
         conn.executescript(SCHEDULED_SCHEMA_SQL)
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
 
 def ensure_scheduled_contact_columns():
     # migration douce si la table existante n'avait pas ces colonnes
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        cur = conn.execute("PRAGMA table_info(scheduled_notifications)")
+        cur = _exec_retry(conn, "PRAGMA table_info(scheduled_notifications)")
         cols = [row[1] for row in cur.fetchall()]
         to_add = []
         if "contact_key" not in cols:
@@ -173,16 +223,40 @@ def ensure_scheduled_contact_columns():
         if "ab_arm" not in cols:
             to_add.append("ALTER TABLE scheduled_notifications ADD COLUMN ab_arm TEXT")
         for sql in to_add:
-            try: conn.execute(sql)
+            try: _exec_retry(conn, sql)
             except Exception: pass
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
+
+def _to_epoch(v) -> int | None:
+    """
+    Convertit v en epoch (int, UTC).
+    - v peut être int/float (déjà epoch) ou string ISO ('YYYY-MM-DD HH:MM:SS', '...T...Z', etc.)
+    """
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip()
+    # ISO 8601: accepte 'Z' et espace comme séparateur
+    try:
+        dt = _dt.fromisoformat(s.replace("Z", "+00:00"))
+        return int(dt.astimezone(_tz.utc).timestamp())
+    except Exception:
+        pass
+    # Dernier recours: conversion SQLite
+    with _connect() as c:
+        cur = _exec_retry(c, "SELECT CAST(strftime('%s', ?) AS INTEGER)", (s,))
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            return int(row[0])
+    raise ValueError(f"timestamp non parseable: {v!r}")
 
 def enqueue_notification(
     sale_id: str,
     template_type: str,
-    due_at,                            
+    due_at,                             # ISO string ou epoch
     payload: dict,
     *,
     contact_key: str | None = None,
@@ -190,9 +264,9 @@ def enqueue_notification(
     ab_arm: str | None = None
 ):
     due_epoch = _to_epoch(due_at)
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        conn.execute(
+        _exec_retry(conn,
             """
             INSERT OR IGNORE INTO scheduled_notifications
               (sale_id, template_type, due_at, payload_json, contact_key, product_id, ab_arm)
@@ -200,15 +274,15 @@ def enqueue_notification(
             """,
             (sale_id, template_type, due_epoch, json.dumps(payload, ensure_ascii=False), contact_key, product_id, ab_arm),
         )
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
+
 def fetch_due_scheduled(limit: int = 50):
     now_epoch = int(time.time())
-    conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = _connect()
     try:
-        cur = conn.execute(
+        cur = _exec_retry(conn,
             """
             SELECT *
             FROM scheduled_notifications
@@ -222,28 +296,29 @@ def fetch_due_scheduled(limit: int = 50):
         return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()
+
 def mark_scheduled_sent(sched_id: int):
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        conn.execute("UPDATE scheduled_notifications SET sent_at = datetime('now'), error = NULL WHERE id = ?", (sched_id,))
-        conn.commit()
+        _exec_retry(conn, "UPDATE scheduled_notifications SET sent_at = CAST(strftime('%s','now') AS INTEGER), error = NULL WHERE id = ?", (sched_id,))
+        _commit_retry(conn)
     finally:
         conn.close()
 
 def mark_scheduled_error(sched_id: int, error: str):
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        conn.execute("UPDATE scheduled_notifications SET error = ? WHERE id = ?", (error, sched_id))
-        conn.commit()
+        _exec_retry(conn, "UPDATE scheduled_notifications SET error = ? WHERE id = ?", (error, sched_id))
+        _commit_retry(conn)
     finally:
         conn.close()
 
 def has_confirmation_for_contact_product(contact_key: str, product_id: str) -> bool:
     if not (contact_key and product_id):
         return False
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        cur = conn.execute(
+        cur = _exec_retry(conn,
             "SELECT 1 FROM notification_log "
             "WHERE contact_key=? AND product_id=? AND template_type LIKE 'confirm_%' "
             "LIMIT 1",
@@ -253,7 +328,6 @@ def has_confirmation_for_contact_product(contact_key: str, product_id: str) -> b
     finally:
         conn.close()
 
-
 def latest_relance_step(contact_key: str, product_id: str) -> str | None:
     """
     Retourne la DERNIÈRE relance envoyée pour ce couple contact+produit,
@@ -262,13 +336,16 @@ def latest_relance_step(contact_key: str, product_id: str) -> str | None:
     """
     if not (contact_key and product_id):
         return None
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        cur = conn.execute(
+        cur = _exec_retry(conn,
             "SELECT template_type FROM notification_log "
             "WHERE contact_key=? AND product_id=? "
             "  AND template_type IN ('relance_t30','relance_t6h','relance_t23h','relance_t47h') "
-            "ORDER BY sent_at DESC LIMIT 1",
+            "ORDER BY (CASE WHEN typeof(sent_at)='text' "
+            "               THEN CAST(strftime('%s',sent_at) AS INTEGER) "
+            "               ELSE sent_at END) DESC "
+            "LIMIT 1",
             (contact_key, product_id)
         )
         row = cur.fetchone()
@@ -282,19 +359,20 @@ def latest_relance_step(contact_key: str, product_id: str) -> str | None:
     finally:
         conn.close()
 
-
 def claim_scheduled_job(job_id: int) -> bool:
     """
     Réservation atomique d’un job (anti-doublon si plusieurs workers).
-    Retourne True si on a bien revendiqué le job.
+    Ici, sent_at sert de "claimed_at" (en epoch) pour rester compatible avec le reste du code.
     """
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        cur = conn.execute(
-            "UPDATE scheduled_notifications SET sent_at = datetime('now'), error = NULL WHERE id = ? AND sent_at IS NULL",
+        cur = _exec_retry(conn,
+            "UPDATE scheduled_notifications "
+            "SET sent_at = CAST(strftime('%s','now') AS INTEGER), error = NULL "
+            "WHERE id = ? AND sent_at IS NULL",
             (job_id,)
         )
-        conn.commit()
+        _commit_retry(conn)
         return cur.rowcount == 1
     finally:
         conn.close()
@@ -306,7 +384,7 @@ class Database:
 
     @contextmanager
     def _get_connection(self):
-        conn = sqlite3.connect(Config.DB_PATH)
+        conn = _connect()
         try:
             yield conn
         finally:
@@ -315,24 +393,24 @@ class Database:
     def _ensure_db_exists(self):
         with self._get_connection() as conn:
             conn.executescript(SCHEMA_SQL_PROCESSED)
-            conn.commit()
+            _commit_retry(conn)
             logger.info("Base de données initialisée")
 
     # processed_sales
     def has_processed(self, sale_id: str) -> bool:
         with self._get_connection() as conn:
-            cur = conn.execute("SELECT 1 FROM processed_sales WHERE sale_id = ? LIMIT 1", (sale_id,))
+            cur = _exec_retry(conn, "SELECT 1 FROM processed_sales WHERE sale_id = ? LIMIT 1", (sale_id,))
             return cur.fetchone() is not None
 
     def mark_processed(self, sale_id: str, status: str):
         with self._get_connection() as conn:
-            conn.execute("INSERT OR IGNORE INTO processed_sales (sale_id, status) VALUES (?, ?)", (sale_id, status))
-            conn.commit()
+            _exec_retry(conn, "INSERT OR IGNORE INTO processed_sales (sale_id, status) VALUES (?, ?)", (sale_id, status))
+            _commit_retry(conn)
 
     # notification_log
     def has_notified(self, sale_id: str, channel: str, template_type: str) -> bool:
         with self._get_connection() as conn:
-            cur = conn.execute("""
+            cur = _exec_retry(conn, """
                 SELECT 1 FROM notification_log
                 WHERE sale_id = ? AND channel = ? AND template_type = ?
                 LIMIT 1
@@ -344,14 +422,17 @@ class Database:
             return False
         with self._get_connection() as conn:
             if window_days and window_days > 0:
-                cur = conn.execute("""
+                threshold = int(time.time()) - int(window_days) * 86400
+                cur = _exec_retry(conn, """
                     SELECT 1 FROM notification_log
                     WHERE recipient = ? AND channel = ? AND template_type = ?
-                      AND sent_at >= datetime('now', ?)
+                      AND (CASE WHEN typeof(sent_at)='text'
+                                THEN CAST(strftime('%s',sent_at) AS INTEGER)
+                                ELSE sent_at END) >= ?
                     LIMIT 1
-                """, (recipient, channel, template_type, f"-{int(window_days)} days"))
+                """, (recipient, channel, template_type, threshold))
             else:
-                cur = conn.execute("""
+                cur = _exec_retry(conn, """
                     SELECT 1 FROM notification_log
                     WHERE recipient = ? AND channel = ? AND template_type = ?
                     LIMIT 1
@@ -362,20 +443,18 @@ class Database:
                       recipient_email: str | None = None, recipient_phone: str | None = None,
                       contact_key: str | None = None, product_id: str | None = None, ab_arm: str | None = None):
         sent_epoch = int(time.time())
-        with self._get_connection() as conn:
+        conn = _connect()
+        try:
             conn.row_factory = sqlite3.Row
 
             # Backfill depuis fact_sales si meta manquante/mal formée
-            row = conn.execute(
+            row = _exec_retry(conn,
                 "SELECT product_id, contact_key, email, phone FROM fact_sales WHERE sale_id=? LIMIT 1",
                 (sale_id,)
             ).fetchone()
             if row:
                 fs_pid = (row["product_id"] or "").strip()
                 fs_ck  = (row["contact_key"] or "").strip() or None
-                # corrige tirets -> underscore quand nécessaire
-                if fs_pid and "-" in fs_pid:
-                    fs_pid = fs_pid.replace("-", "_")
 
                 if not product_id or product_id != fs_pid:
                     product_id = fs_pid or product_id
@@ -387,14 +466,16 @@ class Database:
                     recipient_phone = (row["phone"] or None)
 
             # On écrit sent_at en epoch pour simplifier toutes les requêtes
-            conn.execute("""
+            _exec_retry(conn, """
                 INSERT OR IGNORE INTO notification_log
                 (sale_id, channel, template_type, recipient, recipient_email, recipient_phone,
                  contact_key, product_id, ab_arm, sent_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?)
             """, (sale_id, channel, template_type, recipient, recipient_email, recipient_phone,
                   contact_key, product_id, ab_arm, sent_epoch))
-            conn.commit()
+            _commit_retry(conn)
+        finally:
+            conn.close()
 
 
 # ---------- FACT & DIM (ETL KPI) ----------
@@ -454,12 +535,12 @@ CREATE TABLE IF NOT EXISTS dim_product (
 """
 
 def ensure_fact_dims_schema():
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
         conn.executescript(FACT_SALES_SQL)
         conn.executescript(DIM_CUSTOMER_SQL)
         conn.executescript(DIM_PRODUCT_SQL)
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
 
@@ -490,32 +571,6 @@ def _get_utm(custom_fields):
         pass
     return src, med, camp
 
-def _to_epoch(v) -> int | None:
-    """
-    Convertit v en epoch (int, UTC).
-    - v peut être int/float (déjà epoch) ou string ISO ('YYYY-MM-DD HH:MM:SS', '...T...Z', etc.)
-    - lève ValueError si non parseable.
-    """
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return int(v)
-    s = str(v).strip()
-    # ISO 8601: accepte 'Z' et espace comme séparateur
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        return int(dt.astimezone(timezone.utc).timestamp())
-    except Exception:
-        pass
-    # Dernier recours: conversion SQLite (gère beaucoup de variantes texte)
-    with sqlite3.connect(Config.DB_PATH) as c:
-        cur = c.execute("SELECT CAST(strftime('%s', ?) AS INTEGER)", (s,))
-        row = cur.fetchone()
-        if row and row[0] is not None:
-            return int(row[0])
-    raise ValueError(f"due_at non parseable: {v!r}")
-
-
 def upsert_fact_from_webhook(payload: dict):
     s    = payload.get("sale", {}) or {}
     prod = payload.get("product", {}) or {}
@@ -525,8 +580,18 @@ def upsert_fact_from_webhook(payload: dict):
     sale_id = str(s.get("id") or "")
     status  = (s.get("status") or "").strip().lower()
 
-    amount   = float((s.get("amount") or {}).get("value") or 0.0)
-    currency = (s.get("amount") or {}).get("currency") or (prod.get("price") or {}).get("currency")
+    # --- amount/currency robustes ---
+    amt = s.get("amount")
+    if isinstance(amt, dict):
+        amount   = float(amt.get("value") or 0.0)
+        currency = amt.get("currency")
+    else:
+        amount   = float(amt or 0.0)
+        currency = s.get("currency")
+    if not currency:
+        pv = prod.get("price")
+        if isinstance(pv, dict):
+            currency = pv.get("currency")
 
     # --- timestamps en EPOCH (INTEGER) ---
     created   = _to_epoch(s.get("created_at"))
@@ -538,7 +603,6 @@ def upsert_fact_from_webhook(payload: dict):
     if status == "completed" and not completed:
         completed = created
     if status == "failed" and not failed:
-        # si la source n'envoie pas failed_at, prends le meilleur proxy
         failed = s.get("failed_at") and _to_epoch(s.get("failed_at")) or abandoned or completed or created
 
     product_id   = prod.get("id") or None
@@ -557,7 +621,7 @@ def upsert_fact_from_webhook(payload: dict):
     if t_ref:
         dt = datetime.datetime.utcfromtimestamp(t_ref)
         hod = dt.hour
-        dow = dt.weekday()       # 0 = lundirf
+        dow = dt.weekday()       # 0 = lundi
         month = dt.strftime("%Y-%m")
     else:
         hod = dow = month = None
@@ -565,13 +629,10 @@ def upsert_fact_from_webhook(payload: dict):
     utm_source, utm_medium, utm_campaign = _get_utm(s.get("custom_fields"))
     price_tier = _price_tier(amount)
 
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
-
         # FACT upsert (note l’ajout de failed_at + COALESCE pour ne pas écraser)
-        conn.execute("""
+        _exec_retry(conn, """
         INSERT INTO fact_sales (
           sale_id, status, amount_value, currency,
           product_id, product_name, store_id, store_name,
@@ -622,7 +683,7 @@ def upsert_fact_from_webhook(payload: dict):
                 datetime.datetime.utcfromtimestamp(created).strftime("%Y-%m-%d %H:%M:%S")
                 if created else datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             )
-            conn.execute("""
+            _exec_retry(conn, """
             INSERT INTO dim_product(product_id, product_name, first_seen)
             VALUES (?,?,?)
             ON CONFLICT(product_id) DO UPDATE SET product_name=excluded.product_name
@@ -633,22 +694,21 @@ def upsert_fact_from_webhook(payload: dict):
             now_iso = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             first_iso = datetime.datetime.utcfromtimestamp(created).strftime("%Y-%m-%d %H:%M:%S") if created else now_iso
             last_iso  = datetime.datetime.utcfromtimestamp(completed or created).strftime("%Y-%m-%d %H:%M:%S") if (completed or created) else now_iso
-            conn.execute("""
+            _exec_retry(conn, """
             INSERT INTO dim_customer(contact_key, first_seen, last_seen, country)
             VALUES (?,?,?,?)
             ON CONFLICT(contact_key) DO NOTHING
             """, (contact, first_iso, last_iso, country))
 
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
 
 def rfm_recompute():
     """Recalcule R/F/M + segment et met à jour dim_customer (colonnes *_at en epoch)."""
-    conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = _connect()
     try:
-        rows = conn.execute("""
+        rows = _exec_retry(conn, """
             SELECT contact_key,
                    MIN(COALESCE(created_at, completed_at)) AS first_seen,
                    MAX(COALESCE(completed_at, created_at)) AS last_seen,
@@ -685,7 +745,7 @@ def rfm_recompute():
         def _quantiles(vals):
             if not vals: return (0,0,0,0)
             vs = sorted(vals)
-            def q(p): 
+            def q(p):
                 i = max(0, min(len(vs)-1, int(round(p*(len(vs)-1)))))
                 return vs[i]
             return (q(0.2), q(0.4), q(0.6), q(0.8))
@@ -710,7 +770,7 @@ def rfm_recompute():
             r = score_recency(rd); f = score_quantile(fqv, fq); m = score_quantile(mv, mq)
             first_iso = fs_dt.strftime("%Y-%m-%d %H:%M:%S")
             last_iso  = ls_dt.strftime("%Y-%m-%d %H:%M:%S")
-            conn.execute("""
+            _exec_retry(conn, """
               INSERT INTO dim_customer(contact_key, first_seen, last_seen, country, orders_count, gmv_total,
                                        rfm_recency_days, rfm_frequency, rfm_monetary, rfm_segment)
               VALUES (?,?,?,?,?,?,?,?,?,?)
@@ -724,7 +784,7 @@ def rfm_recompute():
                 rfm_monetary=excluded.rfm_monetary,
                 rfm_segment=excluded.rfm_segment
             """, (ck, first_iso, last_iso, None, int(fqv), float(mv), float(rd), float(f), float(m), seg(r,f,m)))
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
 
@@ -732,9 +792,9 @@ def rfm_recompute():
 def has_active_cadence_for(contact_key: str, product_id: str) -> bool:
     if not (contact_key and product_id):
         return False
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        cur = conn.execute(
+        cur = _exec_retry(conn,
             "SELECT 1 FROM scheduled_notifications WHERE contact_key=? AND product_id=? AND sent_at IS NULL LIMIT 1",
             (contact_key, product_id)
         )
@@ -746,13 +806,13 @@ def refresh_cadence_payload(contact_key: str, product_id: str, payload: dict) ->
     import json as _json
     if not (contact_key and product_id):
         return 0
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        cur = conn.execute(
+        cur = _exec_retry(conn,
             "UPDATE scheduled_notifications SET payload_json=? WHERE contact_key=? AND product_id=? AND sent_at IS NULL",
             (_json.dumps(payload, ensure_ascii=False), contact_key, product_id)
         )
-        conn.commit()
+        _commit_retry(conn)
         return cur.rowcount or 0
     finally:
         conn.close()
@@ -760,13 +820,13 @@ def refresh_cadence_payload(contact_key: str, product_id: str, payload: dict) ->
 def cancel_cadence_for(contact_key: str, product_id: str) -> int:
     if not (contact_key and product_id):
         return 0
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        cur = conn.execute(
+        cur = _exec_retry(conn,
             "DELETE FROM scheduled_notifications WHERE contact_key=? AND product_id=? AND sent_at IS NULL",
             (contact_key, product_id)
         )
-        conn.commit()
+        _commit_retry(conn)
         return cur.rowcount or 0
     finally:
         conn.close()
@@ -774,28 +834,32 @@ def cancel_cadence_for(contact_key: str, product_id: str) -> int:
 def has_recent_contact_product_notification(email: str, phone: str, product_id: str, minutes: int) -> bool:
     if minutes <= 0:
         return False
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        lookback = f"-{minutes} minutes"
-        cur = conn.execute(
-            "SELECT 1 FROM notification_log WHERE sent_at >= datetime('now', ?) "
+        threshold = int(time.time()) - int(minutes) * 60
+        cur = _exec_retry(conn,
+            "SELECT 1 FROM notification_log "
+            "WHERE (CASE WHEN typeof(sent_at)='text' "
+            "            THEN CAST(strftime('%s',sent_at) AS INTEGER) "
+            "            ELSE sent_at END) >= ? "
             "AND product_id = ? AND template_type LIKE 'relance_%' "
-            "AND (recipient_email = ? OR recipient_phone = ?) LIMIT 1",
-            (lookback, product_id or "", (email or "").lower().replace(" ",""), phone or "")
+            "AND (recipient_email = ? OR recipient_phone = ?) "
+            "LIMIT 1",
+            (threshold, product_id or "", (email or "").lower().replace(" ",""), phone or "")
         )
         return cur.fetchone() is not None
     finally:
         conn.close()
 
 
-#--------------------------------------------------------- templates setings
+#--------------------------------------------------------- templates settings
 
 def ensure_templates_schema():
     """
     Crée la table message_templates + index, sans UNIQUE avec expression dans la clause de table
     (SQLite l'interdit), mais avec un UNIQUE INDEX par expression IFNULL(product_id,'').
     """
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS message_templates (
@@ -815,16 +879,13 @@ def ensure_templates_schema():
         CREATE INDEX IF NOT EXISTS idx_msgtpl_product  ON message_templates(product_id);
         CREATE INDEX IF NOT EXISTS idx_msgtpl_key      ON message_templates(template_type, channel);
 
-        -- Contrainte d'unicité logique:
-        -- on veut 1 seul template par (product_id||'' , template_type, channel).
-        -- Impossible dans UNIQUE de table (expressions interdites), donc on passe par un UNIQUE INDEX.
+        -- Contrainte d'unicité logique par expression
         CREATE UNIQUE INDEX IF NOT EXISTS ux_msgtpl_norm
           ON message_templates(IFNULL(product_id,''), template_type, channel);
         """)
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
-
 
 def upsert_template(product_id, template_type, channel, subject, body, is_full_html=False, is_active=True):
     """
@@ -833,37 +894,33 @@ def upsert_template(product_id, template_type, channel, subject, body, is_full_h
         ET (template_type, channel) identiques.
       - Si oui: UPDATE
       - Sinon: INSERT
-
-    Avantage: pas de dépendance à ON CONFLICT sur index d'expression.
     """
     pid_norm = "" if (product_id is None or str(product_id).strip() == "") else str(product_id).strip()
-    conn = sqlite3.connect(Config.DB_PATH)
+    conn = _connect()
     try:
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute("""
+        cur = _exec_retry(conn, """
             SELECT id FROM message_templates
             WHERE IFNULL(product_id,'') = ? AND template_type = ? AND channel = ?
             LIMIT 1
         """, (pid_norm, template_type, channel))
         row = cur.fetchone()
         if row:
-            conn.execute("""
+            _exec_retry(conn, """
                 UPDATE message_templates
                    SET subject = ?, body = ?, is_full_html = ?, is_active = ?,
                        updated_at = datetime('now')
                  WHERE id = ?
             """, (subject, body, 1 if is_full_html else 0, 1 if is_active else 0, row["id"]))
         else:
-            conn.execute("""
+            _exec_retry(conn, """
                 INSERT INTO message_templates (product_id, template_type, channel, subject, body, is_full_html, is_active)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (None if pid_norm == "" else pid_norm,
                   template_type, channel, subject, body,
                   1 if is_full_html else 0, 1 if is_active else 0))
-        conn.commit()
+        _commit_retry(conn)
     finally:
         conn.close()
-
 
 def get_template(product_id, template_type, channel):
     """
@@ -872,12 +929,11 @@ def get_template(product_id, template_type, channel):
       2) Template global (product_id IS NULL)
     Retourne un dict (ou None).
     """
-    conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = _connect()
     try:
         # 1) spécifique
         if product_id:
-            cur = conn.execute("""
+            cur = _exec_retry(conn, """
               SELECT * FROM message_templates
                WHERE product_id = ? AND template_type = ? AND channel = ? AND is_active = 1
                LIMIT 1
@@ -886,7 +942,7 @@ def get_template(product_id, template_type, channel):
             if row:
                 return dict(row)
         # 2) global
-        cur = conn.execute("""
+        cur = _exec_retry(conn, """
           SELECT * FROM message_templates
             WHERE product_id IS NULL AND template_type = ? AND channel = ? AND is_active = 1
             LIMIT 1

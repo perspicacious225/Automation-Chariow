@@ -101,19 +101,21 @@ RELANCE_DELAYS = {
 
 # ===== A/B test des timings =====
 RELANCE_DELAYS_A = RELANCE_DELAYS  # bras contrôle
+
+# RELANCE_DELAYS_B = {
+#     "t30": 1,      
+#     "t6h": 2,
+#     "t23h": 3,
+#     "t47h": 4,
+# }
+
+
 RELANCE_DELAYS_B = {
     "t30": 1,       # minutes
     "t6h": 4*60,
     "t23h": 18*60,
     "t47h": 36*60,
 }
-
-# RELANCE_DELAYS_B = {
-#     "t30": 1,       # minutes
-#     "t6h": 2,
-#     "t23h": 3,
-#     "t47h": 4,
-# }
 
 PRICE_CURRENT = int(os.getenv("PRICE_CURRENT", "5000"))
 PRICE_AFTER   = int(os.getenv("PRICE_AFTER",   "15000"))

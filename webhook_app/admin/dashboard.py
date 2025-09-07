@@ -5,6 +5,7 @@ from functools import wraps
 import os, sqlite3, csv, io, html as _html
 from webhook_app.config import Config
 from webhook_app.utils.database import upsert_template
+from webhook_app.utils.database import _connect as _db_connec
 
 dashboard_bp = Blueprint(
     "dashboard",
@@ -24,35 +25,33 @@ def admin_required(fn):
         return fn(*args, **kwargs)
     return wrapper
 
-
-
+# webhook_app/admin/dashboard.py
+import sqlite3
+from webhook_app.config import Config
 
 def _conn():
-    # S'assure que le dossier existe et est inscriptible
-    db_path = Config.DB_PATH
-    db_dir = os.path.dirname(db_path or "")
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
-
-    # Ouvre la connexion (ne pas la réutiliser entre threads)
-    conn = sqlite3.connect(db_path, timeout=15, check_same_thread=False)
-
-    try:
-        # Évite "database is locked"
-        conn.execute("PRAGMA busy_timeout=5000;")
-     
-        conn.execute("PRAGMA journal_mode=DELETE;")
-    
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA temp_store=MEMORY;")
-       
-        conn.execute("PRAGMA foreign_keys=ON;")
-    except Exception:
-        pass
-
+    """
+    Connexion READ-ONLY pour le dashboard/metrics.
+    - mode=ro => ne prend pas de lock d'écriture
+    - cache=shared + query_only => compatible WAL, ne bloque pas les writers
+    """
+    uri = f"file:{Config.DB_PATH}?mode=ro&cache=shared"
+    conn = sqlite3.connect(
+        uri,
+        uri=True,
+        timeout=5,
+        isolation_level=None,       # autocommit
+        check_same_thread=False
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON;")
+    conn.execute("PRAGMA busy_timeout=3000;")
     return conn
 
+def _conn_rw():
+    return _db_connec()
 
+# Helpers si besoin
 def _scalar(conn, sql, params=()):
     cur = conn.execute(sql, params)
     row = cur.fetchone()
@@ -60,8 +59,12 @@ def _scalar(conn, sql, params=()):
 
 def _rows(conn, sql, params=()):
     cur = conn.execute(sql, params)
+    rows = cur.fetchall()
+    if rows and hasattr(rows[0], "keys"):  
+        return [dict(r) for r in rows]
     cols = [c[0] for c in cur.description]
-    return [dict(zip(cols, r)) for r in cur.fetchall()]
+    return [dict(zip(cols, r)) for r in rows]
+
 
 
 # ------------------------------
@@ -441,27 +444,27 @@ def dashboard_view():
 @admin_required
 def templates_products():
 
-    conn = _conn(); conn.row_factory = sqlite3.Row
-    try:
-        # Liste des produits (ID non vide) + compte des templates par canal
-        products_rows = conn.execute("""
-            SELECT
-              TRIM(p.product_id) AS product_id,
-              COALESCE(p.product_name,'(sans nom)') AS product_name,
-              COUNT(t.id) AS nb_tpl,
-              SUM(CASE WHEN t.channel='email' THEN 1 ELSE 0 END)    AS nb_email,
-              SUM(CASE WHEN t.channel='whatsapp' THEN 1 ELSE 0 END) AS nb_whatsapp
-            FROM dim_product p
-            LEFT JOIN message_templates t
-              ON TRIM(t.product_id) = TRIM(p.product_id)
-            WHERE p.product_id IS NOT NULL
-              AND TRIM(p.product_id) <> ''
-            GROUP BY TRIM(p.product_id), p.product_name
-            ORDER BY p.product_name COLLATE NOCASE ASC
-        """).fetchall()
-    finally:
-        conn.close()
+    with _conn() as conn:
 
+        try:
+            # Liste des produits (ID non vide) + compte des templates par canal
+            products_rows = conn.execute("""
+                SELECT
+                TRIM(p.product_id) AS product_id,
+                COALESCE(p.product_name,'(sans nom)') AS product_name,
+                COUNT(t.id) AS nb_tpl,
+                SUM(CASE WHEN t.channel='email' THEN 1 ELSE 0 END)    AS nb_email,
+                SUM(CASE WHEN t.channel='whatsapp' THEN 1 ELSE 0 END) AS nb_whatsapp
+                FROM dim_product p
+                LEFT JOIN message_templates t
+                ON TRIM(t.product_id) = TRIM(p.product_id)
+                WHERE p.product_id IS NOT NULL
+                AND TRIM(p.product_id) <> ''
+                GROUP BY TRIM(p.product_id), p.product_name
+                ORDER BY p.product_name COLLATE NOCASE ASC
+            """).fetchall()
+        finally:
+            pass
     # Normalise None -> 0 pour éviter les affichages vides
     products = [{
         "product_id":   r["product_id"],
@@ -483,7 +486,7 @@ def templates_for_product():
 
         return redirect(url_for("dashboard.templates_products"))
 
-    conn = _conn(); conn.row_factory = sqlite3.Row
+    conn = _conn_rw();
     try:
         prod = conn.execute("""
             SELECT COALESCE(product_name,'(sans nom)') AS product_name
@@ -499,7 +502,7 @@ def templates_for_product():
             ORDER BY template_type, channel
         """, (pid,)).fetchall()
     finally:
-        conn.close()
+        pass
 
     return render_template(
         "dashboard/templates_for_product.html",
@@ -539,7 +542,7 @@ def edit_template():
     pid_prefill = request.args.get("pid")
     conn = None; row = None
     if rid:
-        conn = _conn(); conn.row_factory = sqlite3.Row
+        conn = _conn_rw();
         row = conn.execute("SELECT * FROM message_templates WHERE id=?", (rid,)).fetchone()
         conn.close()
 
@@ -573,7 +576,7 @@ def delete_template_post():
     if not rid:
         return "id requis", 400
 
-    conn = _conn(); conn.row_factory = sqlite3.Row
+    conn = _conn_rw();
     try:
         row = conn.execute("SELECT product_id FROM message_templates WHERE id=?", (rid,)).fetchone()
         with conn:
@@ -594,7 +597,7 @@ def delete_product_post():
     if not pid:
         return "product_id requis", 400
     try:
-        conn = _conn()
+        conn = _conn_rw()
         with conn:
             conn.execute("DELETE FROM message_templates WHERE product_id=?", (pid,))
             conn.execute("DELETE FROM dim_product WHERE product_id=?", (pid,))
@@ -648,7 +651,7 @@ def preview_template():
 
     rid = request.args.get("id")
     if rid:
-        conn = _conn(); conn.row_factory = sqlite3.Row
+        conn = _conn_rw();
         row = conn.execute("SELECT body, is_full_html FROM message_templates WHERE id=?", (rid,)).fetchone()
         conn.close()
         if not row:
