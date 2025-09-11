@@ -7,6 +7,7 @@ from email.utils import formataddr
 from pathlib import Path
 
 from filelock import FileLock
+from google.auth import exceptions as gauth_exceptions
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -37,79 +38,120 @@ class EmailService:
 
     def _authenticate(self):
         """Charge/rafraîchit le token; en local permet l’obtention interactive."""
-        # 0) Seed initial depuis l'env utile sur Render au 1er boot
+        # Assurer le dossier du token
         try:
             token_dir = os.path.dirname(GMAIL_TOKEN_PATH) or "."
             os.makedirs(token_dir, exist_ok=True)
-            if GMAIL_TOKEN_JSON and not os.path.exists(GMAIL_TOKEN_PATH):
-                # sanity-check JSON
-                json.loads(GMAIL_TOKEN_JSON)
-                with open(GMAIL_TOKEN_PATH, "w") as f:
-                    f.write(GMAIL_TOKEN_JSON)
-                logger.info("GMAIL_TOKEN_JSON seed -> %s", GMAIL_TOKEN_PATH)
         except Exception:
-            logger.exception("Seed du token Gmail échoué (GMAIL_TOKEN_JSON).")
+            logger.exception("Création du dossier token échouée.")
 
-        # 1 Charger le token s’il existe
-        if os.path.exists(GMAIL_TOKEN_PATH):
+        lock = FileLock(str(GMAIL_TOKEN_PATH) + ".lock")
+        with lock:
+            # 0) Seed initial depuis l'env (utile sur Render au 1er boot)
             try:
-                self.creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, SCOPES)
-            except Exception:
-                logger.exception("Lecture du token invalide, suppression du fichier et reprise du flux.")
-                try:
-                    os.remove(GMAIL_TOKEN_PATH)
-                except Exception:
-                    pass
-                self.creds = None
-
-        # 2) Rafraîchir ou créer
-        if not self.creds or not self.creds.valid:
-            if self.creds and self.creds.expired and self.creds.refresh_token:
-                # Token expiré mais rafraîchissable
-                self.creds.refresh(Request())
-                # Persiste la mise à jour (access_token/expiry)
-                try:
+                if GMAIL_TOKEN_JSON and not os.path.exists(GMAIL_TOKEN_PATH):
+                    json.loads(GMAIL_TOKEN_JSON)  # sanity-check
                     with open(GMAIL_TOKEN_PATH, "w") as f:
-                        f.write(self.creds.to_json())
-                except Exception:
-                    logger.exception("Impossible d'écrire le token rafraîchi.")
-            else:
-                # En PROD: pas d’interactif → il faut un token déjà présent
-                if APP_ENV in {"prod", "production"}:
-                    raise RuntimeError(
-                        "Token Gmail absent/invalid en production. "
-                        "Génère-le en local OU fournis GMAIL_TOKEN_JSON pour seed "
-                        f"puis place-le sur GMAIL_TOKEN_PATH={GMAIL_TOKEN_PATH}."
-                    )
+                        f.write(GMAIL_TOKEN_JSON)
+                    logger.info("GMAIL_TOKEN_JSON seed -> %s", GMAIL_TOKEN_PATH)
+            except Exception:
+                logger.exception("Seed du token Gmail échoué (GMAIL_TOKEN_JSON).")
 
-                # En LOCAL: créer un nouveau token via le flow OAuth
-                if not os.path.exists(GMAIL_CLIENT_SECRET_PATH):
-                    raise RuntimeError(f"Client secret introuvable: {GMAIL_CLIENT_SECRET_PATH}")
-
-                flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CLIENT_SECRET_PATH, SCOPES)
+            # 1) Charger le token s’il existe
+            if os.path.exists(GMAIL_TOKEN_PATH):
                 try:
-                    # ouvre le navigateur
-                    self.creds = flow.run_local_server(port=0, access_type="offline", prompt="consent")
+                    self.creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, SCOPES)
                 except Exception:
-                    # méthode console fallback
-                    auth_url, _ = flow.authorization_url(
-                        prompt="consent",
-                        access_type="offline",
-                        include_granted_scopes="true",
-                    )
-                    print("\nOuvrez ce lien dans votre navigateur, autorisez l’accès puis copiez le code :")
-                    print(auth_url)
-                    code = input("Code d'autorisation: ").strip()
-                    flow.fetch_token(code=code)
-                    self.creds = flow.credentials
+                    logger.exception("Lecture du token invalide, suppression du fichier et reprise du flux.")
+                    try:
+                        os.remove(GMAIL_TOKEN_PATH)
+                    except Exception:
+                        pass
+                    self.creds = None
 
-                # Sauvegarder le token pour réutilisation
-                with open(GMAIL_TOKEN_PATH, "w") as f:
-                    f.write(self.creds.to_json())
-                logger.info("Token Gmail créé et écrit dans %s", GMAIL_TOKEN_PATH)
+            # 2) Rafraîchir ou créer
+            if not self.creds or not self.creds.valid:
+                if self.creds and self.creds.expired and getattr(self.creds, "refresh_token", None):
+                    # Token expiré mais rafraîchissable
+                    try:
+                        self.creds.refresh(Request())
+                        with open(GMAIL_TOKEN_PATH, "w") as f:
+                            f.write(self.creds.to_json())
+                        logger.info("Token Gmail rafraîchi et écrit dans %s", GMAIL_TOKEN_PATH)
+                    except gauth_exceptions.RefreshError as e:
+                        # Cas typique: invalid_grant (refresh_token expiré/révoqué)
+                        if "invalid_grant" in str(e).lower():
+                            if GMAIL_TOKEN_JSON:
+                                logger.warning("RefreshError invalid_grant → reseed depuis GMAIL_TOKEN_JSON et retry.")
+                                with open(GMAIL_TOKEN_PATH, "w") as f:
+                                    f.write(GMAIL_TOKEN_JSON)
+                                # recharge et refresh pour obtenir un access_token frais
+                                self.creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, SCOPES)
+                                self.creds.refresh(Request())
+                                with open(GMAIL_TOKEN_PATH, "w") as f:
+                                    f.write(self.creds.to_json())
+                                logger.info("Reseed+refresh OK → nouveau token écrit dans %s", GMAIL_TOKEN_PATH)
+                            else:
+                                raise RuntimeError(
+                                    "RefreshError invalid_grant et aucun GMAIL_TOKEN_JSON fourni. "
+                                    "Régénère un token.json en local (access_type=offline, prompt=consent) "
+                                    "et colle-le dans GMAIL_TOKEN_JSON."
+                                ) from e
+                        else:
+                            raise
+                    except Exception:
+                        logger.exception("Impossible d'écrire le token rafraîchi.")
+                else:
+                    # Pas de creds valides
+                    if APP_ENV in {"prod", "production"}:
+                        # En PROD: pas d’interactif → tenter un seed forcé si dispo, sinon erreur claire
+                        if GMAIL_TOKEN_JSON:
+                            with open(GMAIL_TOKEN_PATH, "w") as f:
+                                f.write(GMAIL_TOKEN_JSON)
+                            self.creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, SCOPES)
+                            if getattr(self.creds, "refresh_token", None):
+                                self.creds.refresh(Request())
+                                with open(GMAIL_TOKEN_PATH, "w") as f:
+                                    f.write(self.creds.to_json())
+                                logger.info("Seed+refresh en production OK → %s", GMAIL_TOKEN_PATH)
+                            else:
+                                raise RuntimeError(
+                                    "Token fourni via GMAIL_TOKEN_JSON sans refresh_token. "
+                                    "Rebootstrap en local avec access_type=offline + prompt=consent."
+                                )
+                        else:
+                            raise RuntimeError(
+                                "Token Gmail absent/invalid en production. "
+                                "Fournis GMAIL_TOKEN_JSON ou génère un token.json en local."
+                            )
+                    else:
+                        # En LOCAL: création via flux OAuth
+                        if not os.path.exists(GMAIL_CLIENT_SECRET_PATH):
+                            raise RuntimeError(f"Client secret introuvable: {GMAIL_CLIENT_SECRET_PATH}")
 
-        # 3) Construire le service
+                        flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CLIENT_SECRET_PATH, SCOPES)
+                        try:
+                            self.creds = flow.run_local_server(port=0, access_type="offline", prompt="consent")
+                        except Exception:
+                            # Fallback sans navigateur
+                            auth_url, _ = flow.authorization_url(
+                                prompt="consent",
+                                access_type="offline",
+                                include_granted_scopes="true",
+                            )
+                            print("\nOuvrez ce lien dans votre navigateur, autorisez l’accès puis copiez le code :")
+                            print(auth_url)
+                            code = input("Code d'autorisation: ").strip()
+                            flow.fetch_token(code=code)
+                            self.creds = flow.credentials
+
+                        with open(GMAIL_TOKEN_PATH, "w") as f:
+                            f.write(self.creds.to_json())
+                        logger.info("Token Gmail créé et écrit dans %s", GMAIL_TOKEN_PATH)
+
+        # 3) Construire le service (hors verrou)
         self.service = build("gmail", "v1", credentials=self.creds, cache_discovery=False)
+
 
     def send_email(self, recipient: str, subject: str, html_body: str, plain_fallback: str = "") -> bool:
         """Envoi d'email via Gmail API."""
