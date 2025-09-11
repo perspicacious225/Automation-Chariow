@@ -21,3 +21,7 @@ __pycache__/
 *.pyc
 
 CHANGELOG_2.3.txt
+
+credentials_gmail.json
+oauth_bootstrap.py
+*note_book.ipynb

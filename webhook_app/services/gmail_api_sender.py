@@ -4,7 +4,9 @@ import base64
 import logging
 from email.message import EmailMessage
 from email.utils import formataddr
+from pathlib import Path
 
+from filelock import FileLock
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -14,8 +16,9 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
-GMAIL_CLIENT_SECRET_PATH = os.getenv("GMAIL_CLIENT_SECRET_PATH", "/opt/secrets/credentials_gmail.json")
-GMAIL_TOKEN_PATH         = os.getenv("GMAIL_TOKEN_PATH", "/data/gmail_token.json")
+
+GMAIL_CLIENT_SECRET_PATH = Path(os.getenv("GMAIL_CLIENT_SECRET_PATH", "/etc/secrets/credentials_gmail.json"))
+GMAIL_TOKEN_PATH         = Path(os.getenv("GMAIL_TOKEN_PATH", "/opt/data/gmail_token.json"))
 GMAIL_TOKEN_JSON         = os.getenv("GMAIL_TOKEN_JSON")
 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
