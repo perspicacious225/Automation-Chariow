@@ -37,7 +37,7 @@ class EmailService:
 
     def _authenticate(self):
         """Charge/rafraîchit le token; en local permet l’obtention interactive."""
-        # 0) Seed initial depuis l'env (utile sur Render au 1er boot)
+        # 0) Seed initial depuis l'env utile sur Render au 1er boot
         try:
             token_dir = os.path.dirname(GMAIL_TOKEN_PATH) or "."
             os.makedirs(token_dir, exist_ok=True)
@@ -50,7 +50,7 @@ class EmailService:
         except Exception:
             logger.exception("Seed du token Gmail échoué (GMAIL_TOKEN_JSON).")
 
-        # 1) Charger le token s’il existe
+        # 1 Charger le token s’il existe
         if os.path.exists(GMAIL_TOKEN_PATH):
             try:
                 self.creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, SCOPES)
