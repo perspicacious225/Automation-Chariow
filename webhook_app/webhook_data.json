@@ -1,0 +1,20 @@
+{
+    "customer": {
+        "email": "yymero0@gmail.com",
+        "name": "nicko"
+    },
+    "store": {
+        "id": "48e359a1-5572-4620-87cb-22a952b13830",
+        "name": "Digitech Hub",
+        "url": "digitech-hub.hubnixx.io"
+    },
+    "products": [
+        {
+            "id": "d2bb7979-c5e8-45ad-8bc7-29b28c8d5b8d",
+            "name": "Licence Microsoft 365 à Vie",
+            "price": "15000",
+            "currency": "XOF",
+            "checkoutUrl": "digitech-hub.hubnixx.io/products/licence-microsoft-365-a-vie/checkout"
+        }
+    ]
+}

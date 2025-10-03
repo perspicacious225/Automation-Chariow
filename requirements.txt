@@ -10,3 +10,5 @@ oauth2client
 gunicorn
 flask_login
 filelock
+psycopg2-binary==2.9.9
+Werkzeug==3.0.1

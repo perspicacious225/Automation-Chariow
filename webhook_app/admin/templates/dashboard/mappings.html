@@ -1,0 +1,79 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Gestion des Mappings Drive{% endblock %}
+{% block body_class %}page-mappings{% endblock %}
+
+{% block head_extra %}
+    <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
+{% endblock %}
+
+{% block content %}
+    <h1 class="page-title">Gestion des Mappings Produit - Drive</h1>
+
+    <div class="content-wrapper" style="max-width: 900px; margin: 2em auto;">
+
+        <div class="card form-card">
+            <h2>Ajouter un nouveau mapping</h2>
+            <form method="post" action="{{ url_for('dashboard.manage_mappings') }}" class="tpl-form">
+                <input type="hidden" name="action" value="add">
+
+                <div class="fields">
+                    <div class="field">
+                        <label for="product_id">ID du Produit</label>
+                        <input type="text" id="product_id" name="product_id" placeholder="ex: prd_k3eyyy" required>
+                    </div>
+
+                    <div class="field">
+                        <label for="folder_id">ID du Dossier Google Drive</label>
+                        <input type="text" id="folder_id" name="folder_id" placeholder="ex: 1ImA88zoenVS7r8TpDuyVAXvhjz1P19vc" required>
+                    </div>
+                </div>
+
+                <div class="buttons" style="display: flex; justify-content: space-between; margin-top: 10px;">
+                    <button class="btn primary" type="submit">Ajouter le Mapping</button>
+                    <a class="btn ghost" href="{{ url_for('dashboard.templates_products') }}">Retour</a>
+                </div>
+            </form>
+        </div>
+
+        <div class="card" style="margin-top: 2em;"> {# Ajout d'une marge pour séparer les deux blocs #}
+            <h2>Mappings Actuels</h2>
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>ID du Produit</th>
+                        <th>ID du Dossier Drive</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for product_id, folder_ids in mappings.items() %}
+                        {% for folder_id in folder_ids %}
+                            <tr>
+                                <td>{{ product_id }}</td>
+                                <td>{{ folder_id }}</td>
+                                <td>
+                                    <form method="post" action="{{ url_for('dashboard.manage_mappings') }}" style="display:inline;">
+                                        <input type="hidden" name="action" value="delete">
+                                        <input type="hidden" name="product_id" value="{{ product_id }}">
+                                        <input type="hidden" name="folder_id" value="{{ folder_id }}">
+                                        <button type="submit" class="btn ghost danger" onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce mapping ?');">
+                                            Supprimer
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="3" style="text-align: center; padding: 20px;">Aucun mapping trouvé dans la base de données.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+    </div> {% endblock %}
+
+{% block scripts %}
+    {# On peut lier un fichier JS spécifique si besoin #}
+{% endblock %}

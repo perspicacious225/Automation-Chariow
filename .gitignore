@@ -1,6 +1,6 @@
 # .gitignore
 *.log
-venv/
+.venv
 # Fichiers sensibles
 credentials_gmail.json
 token.json
@@ -24,4 +24,11 @@ CHANGELOG_2.3.txt
 
 credentials_gmail.json
 oauth_bootstrap.py
-*note_book.ipynb
+note_book.ipynb
+
+message_html.py
+credentials_drive_acces.json
+
+*.lock
+
+*postgresql:

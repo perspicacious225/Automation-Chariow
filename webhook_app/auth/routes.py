@@ -1,7 +1,7 @@
 # webhook_app/auth/routes.py
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
 from flask_login import login_user, logout_user, login_required, current_user
-from webhook_app.utils.auth import (
+from webhook_app.utils.auth_pg import (
     ensure_users_schema, users_count,
     get_user_by_email, create_user, verify_password
 )

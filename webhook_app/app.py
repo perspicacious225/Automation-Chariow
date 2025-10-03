@@ -3,25 +3,22 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json, os, logging
 from webhook_app.admin.dashboard import dashboard_bp
-from webhook_app.utils.database import (
-    Database, sqlite3,
-    ensure_schema_for_webhooks, save_webhook_raw,
-    ensure_schema_for_notifications, ensure_schema_for_scheduled,
-    ensure_notification_log_columns, ensure_scheduled_contact_columns,
-    ensure_fact_dims_schema, upsert_fact_from_webhook,
-    rfm_recompute,ensure_templates_schema,
+from webhook_app.database_pg import (
+    Database,
+    init_pool, close_pool, ensure_all_schemas,
+    save_webhook_raw, upsert_fact_from_webhook, rfm_recompute,
 )
-from webhook_app.utils.migrations import ensure_fact_sales_failed_at
+from webhook_app.drive_service import grant_access_for_sale
+
 from flask_login import LoginManager
-from webhook_app.utils.auth import ensure_users_schema, get_user_by_id
+from webhook_app.utils.auth_pg import ensure_users_schema, get_user_by_id
 
 
 from webhook_app.config import Config
-from webhook_app.services.notifier import Notifier
+from webhook_app.services.notifier import Notifier  
 from webhook_app.services.scheduler import start_scheduler
 from webhook_app.services.mailer import EmailService
 from webhook_app.models.sale import Sale
-
 
 def create_app():
     # Logging
@@ -50,17 +47,14 @@ def create_app():
     # Services
     notifier = Notifier()
     email_service = EmailService()
+    # Pool PG + schémas
+    init_pool()
+    import atexit
+    atexit.register(close_pool)
+    ensure_all_schemas()
     db = Database()
 
-    # ----- DB schemas / migrations (ordre important) -----
-    ensure_schema_for_scheduled()           # base scheduled_notifications (sans colonnes contact/product)
-    ensure_scheduled_contact_columns()      # ajoute contact_key/product_id + index
-    ensure_schema_for_notifications()       # base notification_log
-    ensure_notification_log_columns()       # ajoute recipient_email/phone/contact_key/product_id + index
-    ensure_schema_for_webhooks()            # archive webhooks
-    ensure_fact_dims_schema()
-    ensure_fact_sales_failed_at()
-    ensure_templates_schema()               
+    # ----- Schemas déjà assurés via ensure_all_schemas() -----
 
 
     # ----- Scheduler (un seul démarrage) -----
@@ -122,6 +116,7 @@ def create_app():
             return jsonify({"status": "ok"}), 200
         if request.method == "GET":
             return jsonify({"error": "Use POST for webhooks"}), 405
+        
 
         try:
             if not request.is_json:
@@ -164,7 +159,18 @@ def create_app():
             elif sale.status == "failed":
                 notifier.handle_failed(sale)
             elif sale.status == "completed":
+
+                try:
+                    app.logger.info(f"Vente réussie pour {sale.product_id}. Tentative de partage sur Drive.")
+                    grant_access_for_sale(sale) 
+                except Exception as e:
+                    # On log l'erreur mais on ne bloque pas le reste du processus
+                    app.logger.error(f"Une erreur est survenue lors du partage sur Drive: {e}", exc_info=True)
+
                 notifier.handle_success(sale)
+
+
+
             try:
                 rfm_recompute()
             except Exception as e:
@@ -173,7 +179,7 @@ def create_app():
             db.mark_processed(sale.id, "success")
             return jsonify({"status": "success"}), 200
 
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(f"Erreur base de données: {str(e)}", exc_info=True)
             return jsonify({"error": "Database error"}), 500
         except json.JSONDecodeError as e:
@@ -194,3 +200,5 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), use_reloader=False)
+
+

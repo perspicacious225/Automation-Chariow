@@ -2,10 +2,9 @@
 from flask import Blueprint, jsonify, render_template, request, Response, redirect, make_response, url_for, abort
 from flask_login import login_required, current_user
 from functools import wraps
-import os, sqlite3, csv, io, html as _html
+import os, csv, io, html as _html
 from webhook_app.config import Config
-from webhook_app.utils.database import upsert_template
-from webhook_app.utils.database import _connect as _db_connec
+from webhook_app.database_pg import upsert_template
 
 dashboard_bp = Blueprint(
     "dashboard",
@@ -25,45 +24,19 @@ def admin_required(fn):
         return fn(*args, **kwargs)
     return wrapper
 
-# webhook_app/admin/dashboard.py
-import sqlite3
-from webhook_app.config import Config
+from webhook_app.database_pg import get_connection, execute_with_retry
 
-def _conn():
-    """
-    Connexion READ-ONLY pour le dashboard/metrics.
-    - mode=ro => ne prend pas de lock d'écriture
-    - cache=shared + query_only => compatible WAL, ne bloque pas les writers
-    """
-    uri = f"file:{Config.DB_PATH}?mode=ro&cache=shared"
-    conn = sqlite3.connect(
-        uri,
-        uri=True,
-        timeout=5,
-        isolation_level=None,       # autocommit
-        check_same_thread=False
-    )
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only=ON;")
-    conn.execute("PRAGMA busy_timeout=3000;")
-    return conn
+def _scalar(sql, params=()):
+    with get_connection(readonly=True) as conn:
+        row = execute_with_retry(conn, sql, params, fetch="one")
+        if not row:
+            return 0
+        return list(row.values())[0] if isinstance(row, dict) else (row[0] if row else 0)
 
-def _conn_rw():
-    return _db_connec()
-
-# Helpers si besoin
-def _scalar(conn, sql, params=()):
-    cur = conn.execute(sql, params)
-    row = cur.fetchone()
-    return (row[0] if row else 0) or 0
-
-def _rows(conn, sql, params=()):
-    cur = conn.execute(sql, params)
-    rows = cur.fetchall()
-    if rows and hasattr(rows[0], "keys"):  
+def _rows(sql, params=()):
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(conn, sql, params, fetch="all") or []
         return [dict(r) for r in rows]
-    cols = [c[0] for c in cur.description]
-    return [dict(zip(cols, r)) for r in rows]
 
 
 
@@ -73,335 +46,281 @@ def _rows(conn, sql, params=()):
 @dashboard_bp.route("/metrics.json")
 @login_required
 def metrics_json():
-    import time
-    now_s  = int(time.time())
-    day_s  = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','start of day') AS INTEGER)"))
-    yday_s = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','start of day','-1 day') AS INTEGER)"))
-    d7_s   = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','-7 day') AS INTEGER)"))
-    d30_s  = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','-30 day') AS INTEGER)"))
+    data = {}
 
-    conn = _conn()
-    try:
-        data = {}
+    # pending dues / futures / customers pending
+    data["pending_due"] = _scalar("""
+        SELECT COUNT(*) FROM scheduled_notifications
+        WHERE sent_at IS NULL AND due_at <= NOW()
+    """)
 
-        # pending dues / futures / customers pending
-        data["pending_due"] = _scalar(conn, """
-            SELECT COUNT(*) FROM scheduled_notifications
-            WHERE sent_at IS NULL
-              AND due_at <= ?
-        """, (now_s,))
+    data["pending_future"] = _scalar("""
+        SELECT COUNT(*) FROM scheduled_notifications
+        WHERE sent_at IS NULL AND due_at > NOW()
+    """)
 
-        data["pending_future"] = _scalar(conn, """
-            SELECT COUNT(*) FROM scheduled_notifications
-            WHERE sent_at IS NULL
-              AND due_at > ?
-        """, (now_s,))
+    data["relance_customer_pending_count"] = _scalar("""
+        SELECT COUNT(DISTINCT sale_id) FROM scheduled_notifications
+        WHERE sent_at IS NULL AND due_at > NOW()
+    """)
 
-        data["relance_customer_pending_count"] = _scalar(conn, """
-            SELECT COUNT(DISTINCT sale_id) FROM scheduled_notifications
-            WHERE sent_at IS NULL
-              AND due_at > ?
-        """, (now_s,))
+    # Envois 24h
+    sent24 = _rows("""
+        SELECT channel, COUNT(*) AS cnt
+        FROM notification_log
+        WHERE sent_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY channel
+    """)
+    sent24_map = {r["channel"]: r["cnt"] for r in sent24}
+    data["sent_24h_email"]    = int(sent24_map.get("email", 0))
+    data["sent_24h_whatsapp"] = int(sent24_map.get("whatsapp", 0))
 
-        # Envois 24h
-        data24_from = now_s - 24*3600
+    data["errors_24h"] = _scalar("""
+        SELECT COUNT(*)
+        FROM scheduled_notifications
+        WHERE error IS NOT NULL AND sent_at >= NOW() - INTERVAL '24 hours'
+    """)
 
-        sent24 = _rows(conn, """
-            SELECT channel, COUNT(*) AS cnt
-            FROM notification_log
-            WHERE (
-                CASE WHEN typeof(sent_at)='text'
-                     THEN CAST(strftime('%s', sent_at) AS INTEGER)
-                     ELSE sent_at
-                END
-            ) >= ?
-            GROUP BY channel
-        """, (data24_from,))
-        sent24_map = {r["channel"]: r["cnt"] for r in sent24}
-        data["sent_24h_email"]    = int(sent24_map.get("email", 0))
-        data["sent_24h_whatsapp"] = int(sent24_map.get("whatsapp", 0))
+    data["cadences_active"] = _scalar("""
+        SELECT COUNT(DISTINCT COALESCE(contact_key,'')||'|'||COALESCE(product_id,''))
+        FROM scheduled_notifications
+        WHERE sent_at IS NULL
+    """)
 
-        data["errors_24h"] = _scalar(conn, """
-            SELECT COUNT(*)
-            FROM scheduled_notifications
-            WHERE error IS NOT NULL
-              AND (
-                CASE WHEN typeof(sent_at)='text'
-                     THEN CAST(strftime('%s', sent_at) AS INTEGER)
-                     ELSE sent_at
-                END
-              ) >= ?
-        """, (data24_from,))
+    # Sales KPIs
+    data["gmv_1d"] = _scalar("""
+        SELECT COALESCE(SUM(amount_value*0.90),0)
+        FROM fact_sales
+        WHERE status='completed'
+          AND COALESCE(completed_at,created_at) >= date_trunc('day', NOW())
+    """)
 
-        data["cadences_active"] = _scalar(conn, """
-            SELECT COUNT(DISTINCT COALESCE(contact_key,'')||'|'||COALESCE(product_id,''))
-            FROM scheduled_notifications
-            WHERE sent_at IS NULL
-        """)
+    data["gmv_yday"] = _scalar("""
+        SELECT COALESCE(SUM(amount_value*0.90),0)
+        FROM fact_sales
+        WHERE status='completed'
+          AND COALESCE(completed_at,created_at) >= (date_trunc('day', NOW()) - INTERVAL '1 day')
+          AND COALESCE(completed_at,created_at) <  date_trunc('day', NOW())
+    """)
 
-        # ---------- Sales (epoch en base) ----------
-        # (On laisse les métriques générales telles quelles pour l’instant)
-        data["gmv_1d"] = _scalar(conn, """
-            SELECT COALESCE(SUM(amount_value*0.85),0)
-            FROM fact_sales
-            WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= ?
-        """, (day_s,))
+    data["gmv_7d"] = _scalar("""
+        SELECT COALESCE(SUM(amount_value*0.90),0)
+        FROM fact_sales
+        WHERE status='completed'
+          AND COALESCE(completed_at,created_at) >= NOW() - INTERVAL '7 days'
+    """)
 
-        data["gmv_yday"] = _scalar(conn, """
-            SELECT COALESCE(SUM(amount_value*0.85),0)
-            FROM fact_sales
-            WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= ?
-              AND COALESCE(completed_at,created_at) <  ?
-        """, (yday_s, day_s))
+    data["orders_7d"] = _scalar("""
+        SELECT COUNT(*) FROM fact_sales
+        WHERE status='completed'
+          AND COALESCE(completed_at,created_at) >= NOW() - INTERVAL '7 days'
+    """)
 
-        data["gmv_7d"] = _scalar(conn, """
-            SELECT COALESCE(SUM(amount_value*0.85),0)
-            FROM fact_sales
-            WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= ?
-        """, (d7_s,))
+    data["orders_1d"] = _scalar("""
+        SELECT COUNT(*) FROM fact_sales
+        WHERE status='completed'
+          AND COALESCE(completed_at,created_at) >= date_trunc('day', NOW())
+    """)
 
-        data["orders_7d"] = _scalar(conn, """
-            SELECT COUNT(*) FROM fact_sales
-            WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= ?
-        """, (d7_s,))
+    data["aov_7d"] = (data["gmv_7d"] / data["orders_7d"]) if data["orders_7d"] else 0.0
 
-        data["orders_1d"] = _scalar(conn, """
-            SELECT COUNT(*) FROM fact_sales
-            WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= ?
-        """, (day_s,))
+    # KPI 24h
+    data["abandoned_24h"] = _scalar("""
+        SELECT COUNT(*) FROM fact_sales
+        WHERE status='abandoned'
+          AND abandoned_at >= date_trunc('day', NOW())
+    """)
 
-        data["aov_7d"] = (data["gmv_7d"] / data["orders_7d"]) if data["orders_7d"] else 0.0
+    data["failed_24h"] = _scalar("""
+        SELECT COUNT(*) FROM fact_sales
+        WHERE status='failed'
+          AND failed_at >= date_trunc('day', NOW())
+    """)
 
-        # ---------- KPI 24h corrigés (bornes strictes) ----------
-        data["abandoned_24h"] = _scalar(conn, """
-            SELECT COUNT(*) FROM fact_sales
-            WHERE status='abandoned'
-              AND abandoned_at >= ?
-        """, (day_s,))
+    # Recovered 7d (72h window + proof of relance before completion)
+    data["recovered_orders_7d"] = _scalar("""
+        WITH ab AS (
+          SELECT product_id, contact_key,
+                 MAX(COALESCE(abandoned_at, failed_at)) AS last_ab
+          FROM fact_sales
+          WHERE status IN ('abandoned','failed')
+            AND COALESCE(abandoned_at, failed_at) >= NOW() - INTERVAL '7 days'
+            AND product_id IS NOT NULL AND contact_key IS NOT NULL
+          GROUP BY product_id, contact_key
+        ),
+        co AS (
+          SELECT sale_id, amount_value,
+                 completed_at AS t,
+                 product_id, contact_key
+          FROM fact_sales
+          WHERE status='completed'
+            AND completed_at >= NOW() - INTERVAL '7 days'
+            AND completed_at IS NOT NULL
+            AND product_id IS NOT NULL AND contact_key IS NOT NULL
+        )
+        SELECT COUNT(*)
+        FROM co
+        JOIN ab USING(product_id, contact_key)
+        WHERE co.t BETWEEN ab.last_ab AND (ab.last_ab + INTERVAL '72 hours')
+          AND EXISTS (
+            SELECT 1
+            FROM notification_log nl
+            WHERE nl.product_id  = co.product_id
+              AND nl.contact_key = co.contact_key
+              AND nl.template_type LIKE 'relance_%%'
+              AND nl.sent_at BETWEEN ab.last_ab AND co.t
+          )
+    """)
 
-        data["failed_24h"] = _scalar(conn, """
-            SELECT COUNT(*) FROM fact_sales
-            WHERE status='failed'
-              AND failed_at >= ?
-        """, (day_s,))
+    data["recovered_gmv_7d"] = _scalar("""
+        WITH ab AS (
+          SELECT product_id, contact_key,
+                 MAX(COALESCE(abandoned_at, failed_at)) AS last_ab
+          FROM fact_sales
+          WHERE status IN ('abandoned','failed')
+            AND COALESCE(abandoned_at, failed_at) >= NOW() - INTERVAL '7 days'
+            AND product_id IS NOT NULL AND contact_key IS NOT NULL
+          GROUP BY product_id, contact_key
+        ),
+        co AS (
+          SELECT sale_id, amount_value,
+                 completed_at AS t,
+                 product_id, contact_key
+          FROM fact_sales
+          WHERE status='completed'
+            AND completed_at >= NOW() - INTERVAL '7 days'
+            AND completed_at IS NOT NULL
+            AND product_id IS NOT NULL AND contact_key IS NOT NULL
+        )
+        SELECT COALESCE(SUM(co.amount_value*0.90),0)
+        FROM co
+        JOIN ab USING(product_id, contact_key)
+        WHERE co.t BETWEEN ab.last_ab AND (ab.last_ab + INTERVAL '72 hours')
+          AND EXISTS (
+            SELECT 1
+            FROM notification_log nl
+            WHERE nl.product_id  = co.product_id
+              AND nl.contact_key = co.contact_key
+              AND nl.template_type LIKE 'relance_%%'
+              AND nl.sent_at BETWEEN ab.last_ab AND co.t
+          )
+    """)
 
-        # ---------- Recovered 7j (72h + preuve de relance) ----------
-        data["recovered_orders_7d"] = _scalar(conn, f"""
-            WITH ab AS (
-              SELECT product_id, contact_key,
-                     MAX(COALESCE(abandoned_at, failed_at)) AS last_ab
-              FROM fact_sales
-              WHERE status IN ('abandoned','failed')
-                AND COALESCE(abandoned_at, failed_at) >= ?
-                AND product_id IS NOT NULL AND contact_key IS NOT NULL
-              GROUP BY product_id, contact_key
-            ),
-            co AS (
-              SELECT sale_id, amount_value,
-                     completed_at AS t,
-                     product_id, contact_key
-              FROM fact_sales
-              WHERE status='completed'
-                AND completed_at >= ?
-                AND completed_at IS NOT NULL
-                AND product_id IS NOT NULL AND contact_key IS NOT NULL
-            )
-            SELECT COUNT(*)
-            FROM co
-            JOIN ab USING(product_id, contact_key)
-            WHERE co.t BETWEEN ab.last_ab AND (ab.last_ab + 72*3600)
-              AND EXISTS (
-                SELECT 1
-                FROM notification_log nl
-                WHERE nl.product_id  = co.product_id
-                  AND nl.contact_key = co.contact_key
-                  AND nl.template_type LIKE 'relance_%'
-                  AND (CASE WHEN typeof(nl.sent_at)='text'
-                            THEN CAST(strftime('%s',nl.sent_at) AS INTEGER)
-                            ELSE nl.sent_at END)
-                      BETWEEN ab.last_ab AND co.t
-              )
-        """, (d7_s, d7_s))
+    data["ab_failed_7d"] = _scalar("""
+        SELECT COUNT(*) FROM fact_sales
+        WHERE status IN ('abandoned','failed')
+          AND COALESCE(abandoned_at, failed_at) >= NOW() - INTERVAL '7 days'
+    """)
+    data["recovered_rate_7d"] = (data["recovered_orders_7d"] / data["ab_failed_7d"]) if data["ab_failed_7d"] else 0.0
 
-        data["recovered_gmv_7d"] = _scalar(conn, f"""
-            WITH ab AS (
-              SELECT product_id, contact_key,
-                     MAX(COALESCE(abandoned_at, failed_at)) AS last_ab
-              FROM fact_sales
-              WHERE status IN ('abandoned','failed')
-                AND COALESCE(abandoned_at, failed_at) >= ?
-                AND product_id IS NOT NULL AND contact_key IS NOT NULL
-              GROUP BY product_id, contact_key
-            ),
-            co AS (
-              SELECT sale_id, amount_value,
-                     completed_at AS t,
-                     product_id, contact_key
-              FROM fact_sales
-              WHERE status='completed'
-                AND completed_at >= ?
-                AND completed_at IS NOT NULL
-                AND product_id IS NOT NULL AND contact_key IS NOT NULL
-            )
-            SELECT COALESCE(SUM(co.amount_value*0.85),0)
-            FROM co
-            JOIN ab USING(product_id, contact_key)
-            WHERE co.t BETWEEN ab.last_ab AND (ab.last_ab + 72*3600)
-              AND EXISTS (
-                SELECT 1
-                FROM notification_log nl
-                WHERE nl.product_id  = co.product_id
-                  AND nl.contact_key = co.contact_key
-                  AND nl.template_type LIKE 'relance_%'
-                  AND (CASE WHEN typeof(nl.sent_at)='text'
-                            THEN CAST(strftime('%s',nl.sent_at) AS INTEGER)
-                            ELSE nl.sent_at END)
-                      BETWEEN ab.last_ab AND co.t
-              )
-        """, (d7_s, d7_s))
+    # Conversions par step
+    data["conversions_by_step_7d"] = _rows("""
+        WITH co AS (
+          SELECT sale_id, product_id, contact_key,
+                 COALESCE(completed_at,created_at) AS completed_at,
+                 amount_value 
+          FROM fact_sales
+          WHERE status='completed'
+            AND COALESCE(completed_at,created_at) >= NOW() - INTERVAL '7 days'
+        ),
+        lastrel AS (
+          SELECT contact_key, product_id, template_type,
+                 sent_at AS sent_epoch
+          FROM notification_log
+          WHERE template_type LIKE 'relance_%%'
+        ),
+        x AS (
+          SELECT c.sale_id,
+                 (
+                   SELECT lr.template_type
+                   FROM lastrel lr
+                   WHERE lr.contact_key = c.contact_key
+                     AND lr.product_id  = c.product_id
+                     AND lr.sent_epoch <= c.completed_at
+                   ORDER BY lr.sent_epoch DESC
+                   LIMIT 1
+                 ) AS template_type
+          FROM co c
+        )
+        SELECT x.template_type AS step,
+               COUNT(*) AS conv,
+               COALESCE(SUM(c.amount_value *0.90 ),0) AS gmv
+        FROM x
+        JOIN co c ON c.sale_id = x.sale_id
+        WHERE x.template_type IS NOT NULL
+        GROUP BY x.template_type
+        ORDER BY x.template_type
+    """)
 
-        data["ab_failed_7d"] = _scalar(conn, """
-            SELECT COUNT(*) FROM fact_sales
-            WHERE status IN ('abandoned','failed')
-              AND COALESCE(abandoned_at, failed_at) >= ?
-        """, (d7_s,))
-        data["recovered_rate_7d"] = (data["recovered_orders_7d"] / data["ab_failed_7d"]) if data["ab_failed_7d"] else 0.0
+    # Tops
+    data["top_products_7d"] = _rows("""
+        SELECT COALESCE(product_id,'(n/a)') AS product_id,
+               COUNT(*) AS orders,
+               COALESCE(SUM(amount_value*0.90),0) AS gmv
+        FROM fact_sales
+        WHERE status='completed'
+          AND COALESCE(completed_at,created_at) >= NOW() - INTERVAL '7 days'
+        GROUP BY COALESCE(product_id,'(n/a)')
+        ORDER BY gmv DESC
+        LIMIT 5
+    """)
 
-        # ---------- Conversions par step (inchangé pour l’instant) ----------
-        data["conversions_by_step_7d"] = _rows(conn, f"""
-            WITH co AS (
-              SELECT sale_id, product_id, contact_key,
-                     COALESCE(completed_at,created_at) AS completed_at,
-                     amount_value 
-              FROM fact_sales
-              WHERE status='completed'
-                AND COALESCE(completed_at,created_at) >= ?
-            ),
-            lastrel AS (
-              SELECT contact_key, product_id, template_type,
-                     (CASE WHEN typeof(sent_at)='text'
-                           THEN CAST(strftime('%s',sent_at) AS INTEGER)
-                           ELSE sent_at END) AS sent_epoch
-              FROM notification_log
-              WHERE template_type LIKE 'relance_%'
-            ),
-            x AS (
-              SELECT c.sale_id,
-                     (
-                       SELECT lr.template_type
-                       FROM lastrel lr
-                       WHERE lr.contact_key = c.contact_key
-                         AND lr.product_id  = c.product_id
-                         AND lr.sent_epoch <= c.completed_at
-                       ORDER BY lr.sent_epoch DESC
-                       LIMIT 1
-                     ) AS template_type
-              FROM co c
-            )
-            SELECT x.template_type AS step,
-                   COUNT(*) AS conv,
-                   COALESCE(SUM(c.amount_value *0.85 ),0) AS gmv
-            FROM x
-            JOIN co c ON c.sale_id = x.sale_id
-            WHERE x.template_type IS NOT NULL
-            GROUP BY x.template_type
-            ORDER BY x.template_type
-        """, (d7_s,))
+    data["countries_7d"] = _rows("""
+        SELECT COALESCE(country,'(n/a)') AS country,
+               COUNT(*) AS orders,
+               COALESCE(SUM(amount_value*0.90),0) AS gmv
+        FROM fact_sales
+        WHERE status='completed'
+          AND COALESCE(completed_at,created_at) >= NOW() - INTERVAL '7 days'
+        GROUP BY COALESCE(country,'(n/a)')
+        ORDER BY gmv DESC
+        LIMIT 5
+    """)
 
-        # ---------- Tops (inchangé pour l’instant) ----------
-        data["top_products_7d"] = _rows(conn, """
-            SELECT COALESCE(product_id,'(n/a)') AS product_id,
-                   COUNT(*) AS orders,
-                   COALESCE(SUM(amount_value*0.85),0) AS gmv
-            FROM fact_sales
-            WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= ?
-            GROUP BY COALESCE(product_id,'(n/a)')
-            ORDER BY gmv DESC
-            LIMIT 5
-        """, (d7_s,))
-
-        data["countries_7d"] = _rows(conn, """
-            SELECT COALESCE(country,'(n/a)') AS country,
-                   COUNT(*) AS orders,
-                   COALESCE(SUM(amount_value*0.85),0) AS gmv
-            FROM fact_sales
-            WHERE status='completed'
-              AND COALESCE(completed_at,created_at) >= ?
-            GROUP BY COALESCE(country,'(n/a)')
-            ORDER BY gmv DESC
-            LIMIT 5
-        """, (d7_s,))
-
-        return jsonify(data)
-    finally:
-        conn.close()
+    return jsonify(data)
 
 @dashboard_bp.route("/ts.json")
 @login_required
 def ts_json():
-    import time
-    d30_s = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','-30 day') AS INTEGER)"))
-    conn = _conn()
-    try:
-        rows = _rows(conn, """
-          SELECT
-            strftime('%Y-%m-%d', COALESCE(completed_at,created_at), 'unixepoch') AS d,
-            SUM(CASE WHEN status='completed' THEN amount_value*0.85 ELSE 0 END) AS gmv,
-            SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END)               AS orders,
-            SUM(CASE WHEN status IN ('abandoned','failed') THEN 1 ELSE 0 END)  AS abandoned
-          FROM fact_sales
-          WHERE COALESCE(created_at, completed_at) >= ?
-          GROUP BY 1
-          ORDER BY 1
-        """, (d30_s,))
-        return jsonify(rows)
-    finally:
-        conn.close()
+
+    rows = _rows("""
+      SELECT
+        TO_CHAR(COALESCE(completed_at,created_at), 'YYYY-MM-DD') AS d,
+        SUM(CASE WHEN status='completed' THEN amount_value*0.90 ELSE 0 END) AS gmv,
+        SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END)               AS orders,
+        SUM(CASE WHEN status IN ('abandoned','failed') THEN 1 ELSE 0 END)  AS abandoned
+      FROM fact_sales
+      WHERE COALESCE(created_at, completed_at) >= NOW() - INTERVAL '30 days'
+      GROUP BY 1
+      ORDER BY 1
+    """)
+    return jsonify(rows)
 
 @dashboard_bp.route("/heatmap.json")
 @login_required
 def heatmap_json():
-    import time
-    d30_s = int(_scalar(_conn(), "SELECT CAST(strftime('%s','now','-30 day') AS INTEGER)"))
-    conn = _conn()
-    try:
-        rows = _rows(conn, """
-          SELECT dow, hour_of_day, COUNT(*) AS cnt
-          FROM fact_sales
-          WHERE status='completed'
-            AND COALESCE(completed_at,created_at) >= ?
-          GROUP BY dow, hour_of_day
-        """, (d30_s,))
-        return jsonify(rows)
-    finally:
-        conn.close()
-
-
-
-
+  
+    rows = _rows("""
+      SELECT dow, hour_of_day, COUNT(*) AS cnt
+      FROM fact_sales
+      WHERE status='completed'
+        AND COALESCE(completed_at,created_at) >= NOW() - INTERVAL '30 days'
+      GROUP BY dow, hour_of_day
+    """)
+    return jsonify(rows)
 
 @dashboard_bp.route("/export.csv")
 @admin_required
 def export_csv():
-    conn = _conn()
-    try:
-        q = """
-        SELECT sale_id,status,amount_value,currency,product_id,product_name,store_name,
-               contact_key,email,phone,country,created_at,completed_at,abandoned_at,
-               time_to_complete_min,hour_of_day,dow,month,utm_source,utm_medium,utm_campaign,price_tier
-        FROM fact_sales
-        WHERE COALESCE(created_at,completed_at) >= datetime('now','-90 day')
-        ORDER BY COALESCE(completed_at,created_at) DESC
-        """
-        rows = _rows(conn, q)
-    finally:
-        conn.close()
+    q = """
+    SELECT sale_id,status,amount_value,currency,product_id,product_name,store_name,
+           contact_key,email,phone,country,created_at,completed_at,abandoned_at,
+           time_to_complete_min,hour_of_day,dow,month,utm_source,utm_medium,utm_campaign,price_tier
+    FROM fact_sales
+    WHERE COALESCE(created_at,completed_at) >= NOW() - INTERVAL '90 days'
+    ORDER BY COALESCE(completed_at,created_at) DESC
+    """
+    rows = _rows(q)
     si = io.StringIO()
     if rows:
         w = csv.DictWriter(si, fieldnames=list(rows[0].keys()))
@@ -444,11 +363,9 @@ def dashboard_view():
 @admin_required
 def templates_products():
 
-    with _conn() as conn:
-
-        try:
-            # Liste des produits (ID non vide) + compte des templates par canal
-            products_rows = conn.execute("""
+    from webhook_app.database_pg import get_connection, execute_with_retry
+    with get_connection(readonly=True) as conn:
+        products_rows = execute_with_retry(conn, """
                 SELECT
                 TRIM(p.product_id) AS product_id,
                 COALESCE(p.product_name,'(sans nom)') AS product_name,
@@ -461,10 +378,8 @@ def templates_products():
                 WHERE p.product_id IS NOT NULL
                 AND TRIM(p.product_id) <> ''
                 GROUP BY TRIM(p.product_id), p.product_name
-                ORDER BY p.product_name COLLATE NOCASE ASC
-            """).fetchall()
-        finally:
-            pass
+                ORDER BY p.product_name ASC
+            """, fetch="all") or []
     # Normalise None -> 0 pour éviter les affichages vides
     products = [{
         "product_id":   r["product_id"],
@@ -486,23 +401,21 @@ def templates_for_product():
 
         return redirect(url_for("dashboard.templates_products"))
 
-    conn = _conn_rw();
-    try:
-        prod = conn.execute("""
+    from webhook_app.database_pg import get_connection, execute_with_retry
+    with get_connection(readonly=True) as conn:
+        prod = execute_with_retry(conn, """
             SELECT COALESCE(product_name,'(sans nom)') AS product_name
             FROM dim_product
-            WHERE TRIM(product_id)=?
-        """, (pid,)).fetchone()
+            WHERE TRIM(product_id)=%s
+        """, (pid,), fetch="one")
 
-        rows = conn.execute("""
+        rows = execute_with_retry(conn, """
             SELECT id, TRIM(product_id) AS product_id, template_type, channel,
                    is_full_html, is_active, updated_at
             FROM message_templates
-            WHERE TRIM(product_id) = ?
+            WHERE TRIM(product_id) = %s
             ORDER BY template_type, channel
-        """, (pid,)).fetchall()
-    finally:
-        pass
+        """, (pid,), fetch="all") or []
 
     return render_template(
         "dashboard/templates_for_product.html",
@@ -542,9 +455,9 @@ def edit_template():
     pid_prefill = request.args.get("pid")
     conn = None; row = None
     if rid:
-        conn = _conn_rw();
-        row = conn.execute("SELECT * FROM message_templates WHERE id=?", (rid,)).fetchone()
-        conn.close()
+        from webhook_app.database_pg import get_connection, execute_with_retry
+        with get_connection(readonly=True) as conn:
+            row = execute_with_retry(conn, "SELECT * FROM message_templates WHERE id=%s", (rid,), fetch="one")
 
     def val(field, default=""):
         if row is None:
@@ -576,13 +489,10 @@ def delete_template_post():
     if not rid:
         return "id requis", 400
 
-    conn = _conn_rw();
-    try:
-        row = conn.execute("SELECT product_id FROM message_templates WHERE id=?", (rid,)).fetchone()
-        with conn:
-            conn.execute("DELETE FROM message_templates WHERE id=?", (rid,))
-    finally:
-        conn.close()
+    from webhook_app.database_pg import get_connection, execute_with_retry
+    with get_connection() as conn:
+        row = execute_with_retry(conn, "SELECT product_id FROM message_templates WHERE id=%s", (rid,), fetch="one")
+        execute_with_retry(conn, "DELETE FROM message_templates WHERE id=%s", (rid,))
 
     if row and row["product_id"]:
         return redirect(url_for("dashboard.templates_for_product", id=row["product_id"]))
@@ -597,13 +507,40 @@ def delete_product_post():
     if not pid:
         return "product_id requis", 400
     try:
-        conn = _conn_rw()
-        with conn:
-            conn.execute("DELETE FROM message_templates WHERE product_id=?", (pid,))
-            conn.execute("DELETE FROM dim_product WHERE product_id=?", (pid,))
+        from webhook_app.database_pg import get_connection, execute_with_retry
+        with get_connection() as conn:
+            execute_with_retry(conn, "DELETE FROM message_templates WHERE product_id=%s", (pid,))
+            execute_with_retry(conn, "DELETE FROM dim_product WHERE product_id=%s", (pid,))
     except Exception as e:
         return f"Erreur suppression: {e}", 500
     return redirect(url_for("dashboard.templates_products"))
+
+
+
+from webhook_app.database_pg import read_mappings_from_db, add_mapping_to_db, delete_mapping_from_db
+@dashboard_bp.route("/mappings", methods=["GET", "POST"])
+@admin_required 
+def manage_mappings():
+    if request.method == "POST":
+        action = request.form.get("action")
+        
+        if action == "add":
+            product_id = request.form.get("product_id")
+            folder_id = request.form.get("folder_id")
+            if product_id and folder_id:
+                add_mapping_to_db(product_id, folder_id)
+        
+        elif action == "delete":
+            product_id = request.form.get("product_id")
+            folder_id = request.form.get("folder_id")
+            if product_id and folder_id:
+                delete_mapping_from_db(product_id, folder_id)
+        
+        return redirect(url_for("dashboard.manage_mappings"))
+
+    # Pour une requête GET, on affiche simplement la page
+    current_mappings = read_mappings_from_db()
+    return render_template("dashboard/mappings.html", mappings=current_mappings)
 
 
 @dashboard_bp.route("/templates/preview", methods=["GET", "POST"])
@@ -612,6 +549,7 @@ def preview_template():
 
     try:
         from webhook_app.services.mailer import render_email_with_brand as _brand_wrap
+        
     except Exception:
         def _brand_wrap(fragment_html, tvars):
             return f"""<!doctype html><meta charset="utf-8">
@@ -623,9 +561,9 @@ def preview_template():
     tvars = {
         "customer_first_name": "Jean",
         "customer_email": "jean@example.com",
-        "product_name": "Microsoft 365 à vie",
+        "product_name": "Microsoft 365 à vie 2025  ",
         "checkout_url": "https://digitechhub.store/checkout/test",
-        "price_current_fmt": "5 000 FCFA",
+        "price_current_fmt": "3 900 FCFA",
         "price_after_fmt": "15 000 FCFA",
         "store_name": "Digitech Hub",
         "store_url": "https://digitechhub.store",
@@ -650,16 +588,22 @@ def preview_template():
         return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
     rid = request.args.get("id")
+    
     if rid:
-        conn = _conn_rw();
-        row = conn.execute("SELECT body, is_full_html FROM message_templates WHERE id=?", (rid,)).fetchone()
-        conn.close()
-        if not row:
-            return "Template introuvable", 404
-        body = row["body"] or ""
-        is_full_html = bool(row["is_full_html"])
-        html = _render_body(body, is_full_html)
-        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+            # VERSION CORRIGÉE : Utilise le gestionnaire de connexion et la bonne syntaxe
+            with get_connection(readonly=True) as conn:
+                row = execute_with_retry(conn, 
+                                        "SELECT body, is_full_html FROM message_templates WHERE id=%s", 
+                                        (rid,), 
+                                        fetch="one")
+            
+            if not row:
+                return "Template introuvable", 404
+            
+            body = row["body"] or ""
+            is_full_html = bool(row["is_full_html"])
+            html = _render_body(body, is_full_html)
+            return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
     if "body" in request.args:
         body = request.args.get("body", "")

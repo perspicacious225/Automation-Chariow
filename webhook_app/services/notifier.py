@@ -7,8 +7,8 @@ from .gmail_api_sender import EmailService
 
 from .whatsapp import WhatsAppService
 from webhook_app.config import Config, RELANCE_DELAYS, RELANCE_DELAYS_A, RELANCE_DELAYS_B, WHATSAPP_AND_EMAIL_ALWAYS
-from webhook_app.utils.database import (
-    Database, enqueue_notification, has_active_cadence_for, 
+from webhook_app.database_pg import (
+    Database, enqueue_notification, has_active_cadence_for,
     refresh_cadence_payload, get_template,
     has_recent_contact_product_notification, cancel_cadence_for,
     has_confirmation_for_contact_product, latest_relance_step
@@ -106,7 +106,7 @@ class Notifier:
             "store_url": sale.store_url or "",
             "current_year": getattr(sale, "current_year", "") or "",
 
-            "Message_commun": messages.Message_commun,
+            "Message_commun": messages.Message_commun_html,
             "Message_commun_wa": messages.Message_commun_wa,
 
             "price_current": pc,
@@ -146,7 +146,7 @@ class Notifier:
 
         # Blocs communs rendus une fois
         if hasattr(messages, "Message_commun"):
-            tvars["Message_commun"] = _render(messages.Message_commun, tvars)
+            tvars["Message_commun"] = _render(messages.Message_commun_html, tvars)
         if hasattr(messages, "Message_commun_wa"):
             tvars["Message_commun_wa"] = _render(messages.Message_commun_wa, tvars)
 

@@ -1,80 +1,36 @@
 {
-  "event": "failed.sale",
+  "event": "abandoned.sale",
   "sale": {
-    "id": "STALTTTTttTTTTTTETTTTT",
+    "id": "S_LOCAL_0012",
+    "status": "abandoned",
     "amount": {
-      "raw": 4900,
       "value": 4900,
-      "formatted": "F CFA 4,900",
-      "short": "4.9K",
       "currency": "XOF"
     },
-    "original_amount": {
-      "raw": 4900,
-      "value": 9000,
-      "formatted": "F CFA 4,900",
-      "short": "4.9K",
-      "currency": "XOF"
-    },
-    "discount_amount": {
-      "raw": 0,
-      "value": 0,
-      "formatted": "F CFA 0",
-      "short": "0",
-      "currency": "XOF"
-    },
-    "settlement": {
-      "amount": {
-        "raw": null,
-        "value": null,
-        "formatted": null,
-        "short": null,
-        "currency": "XOF"
-      },
-      "due_at": null,
-      "done_at": null,
-      "service_fee": {
-        "raw": null,
-        "value": null,
-        "formatted": null,
-        "short": null,
-        "currency": "XOF"
-      }
-    },
-    "status": "failed",
-    "created_at": "2025-09-07T13:00:02.000000Z",
-    "custom_fields": null,
-    "completed_at": "2025-09-07T13:30:12.000000Z",
-    "abandoned_at": null,
-    "failed_at": null
+    "created_at": "2025-09-30T10:00:00Z",
+    "completed_at": "2025-10-03T10:05:00Z",
+    "abandoned_at": "2025-09-30T10:05:00Z"
   },
   "product": {
     "id": "prd_k3eyyy",
-    "name": "Licence à Vie , Microsoft 365 9k",
-    "url": "https://digitechhub.store/office-365-a-vie",
+    "name": "Microsoft 365 à vie test",
     "price": {
-      "raw": 15000,
       "value": 15000,
-      "formatted": "F CFA 15,000",
-      "short": "15.0K",
       "currency": "XOF"
     }
   },
   "customer": {
-    "id": "cus_uqu1g4b1",
-    "name": "Allassane Sawadogo",
-    "first_name": "Allassane",
-    "last_name": "Sawadogo",
-    "email": "perspicaciousnicko@gmail.com",
-    "phone": "2250789333113",
+    "first_name": "Jean",
+    "email": "yymero0@gmail.com",
+    "phone": "+2250789333113",
     "country": "CI"
   },
   "store": {
-    "id": "store_4jy5h5ggl4fu",
+    "id": "ST1",
     "name": "Digitech Hub",
     "url": "https://digitechhub.store"
   },
   "checkout": {
-    "url": "https://digitechhub.store/prd_k3eyyy/checkout?first_name=Allassane&last_name=Sawadogo&email=kranov8994%40gmail.com&country=CI&phone=0748030049"
+    "url": "https://digitechhub.store/checkout/prd_ke3yyy"
   }
 }

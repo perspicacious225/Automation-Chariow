@@ -23,7 +23,6 @@ class Sale:
     current_year:str
     currency: str
 
-
     @classmethod
     def from_webhook(cls, payload: Dict[str, Any]) -> 'Sale':
         sale = payload.get("sale", {})
@@ -48,5 +47,3 @@ class Sale:
             current_year=(sale.get("created_at","")[:4] or ""),
             product_value=payload.get("product", {}).get("price", {}).get("value"),
         )
-    
-

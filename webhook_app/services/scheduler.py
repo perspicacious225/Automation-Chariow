@@ -1,7 +1,7 @@
 # webhook_app/services/scheduler.py
 import threading, time, json, logging
 from typing import Callable
-from webhook_app.utils.database import (
+from webhook_app.database_pg import (
     fetch_due_scheduled,
     mark_scheduled_error,
     claim_scheduled_job,

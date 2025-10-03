@@ -3,7 +3,13 @@
 
 {% block content %}
   <h1>Templates — par produit</h1>
-  <a class="btn secondary" href="{{ url_for('dashboard.dashboard_view') }}">← Retour Dashboard</a>
+
+  <div class="buttons" style="display: flex; justify-content: space-between; margin: 15px;">
+
+      <a class="btn secondary" href="{{ url_for('dashboard.dashboard_view') }}">← Retour Dashboard</a>
+      <a class="btn ghost" href="{{ url_for('dashboard.manage_mappings') }}">Mappings</a>
+
+  </div>
 
   <div class="card">
     <table>
