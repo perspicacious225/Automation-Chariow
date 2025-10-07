@@ -1,0 +1,60 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Détail des Relances pour {{ contact_key }}{% endblock %}
+{% block body_class %}page-relances-detail{% endblock %}
+
+{% block head_extra %}
+    <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
+{% endblock %}
+
+{% block content %}
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h1 class="page-title">Relances pour : {{ contact_key }}</h1>
+        <a class="btn ghost" href="{{ url_for('dashboard.manage_relances_summary') }}">← Retour à la liste</a>
+    </div>
+
+    <div class="card">
+        <table class="results-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Produit</th>
+                    <th>Template</th>
+                    <th style="width: 25%;">Prévu pour le (éditable)</th>
+                    <th style="width: 20%;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for relance in relances %}
+                    <tr>
+                        <form method="post" action="{{ url_for('dashboard.manage_relances_for_contact', contact_key=contact_key) }}">
+                            <input type="hidden" name="job_id" value="{{ relance.id }}">
+                            
+                            <td>{{ relance.id }}</td>
+                            <td>{{ relance.product_id or 'N/A' }}</td>
+                            <td>{{ relance.template_type }}</td>
+                            <td>
+                                <input type="datetime-local" 
+                                       class="form-control"
+                                       name="due_at_{{ relance.id }}" 
+                                       value="{{ relance.due_at.strftime('%Y-%m-%dT%H:%M') if relance.due_at else '' }}">
+                            </td>
+                            <td>
+                                <button type="submit" name="action" value="update" class="btn primary small">
+                                    Enregistrer
+                                </button>
+                                <button type="submit" name="action" value="delete" class="btn ghost danger small" 
+                                        formnovalidate onclick="return confirm('Êtes-vous sûr de vouloir annuler cette relance ?');">
+                                    Annuler
+                                </button>
+                            </td>
+                        </form>
+                    </tr>
+                {% else %}
+                     <tr>
+                        <td colspan="5" style="text-align: center; padding: 20px;">Aucune relance en attente pour ce client.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endblock %}

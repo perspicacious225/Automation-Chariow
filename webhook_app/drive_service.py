@@ -9,7 +9,7 @@ import os
 from .database_pg import get_drive_mappings
 
 # Configuration
-SERVICE_ACCOUNT_FILE =  Path(os.getenv("SERVICE_ACCOUNT_CRED", "/etc/secrets/credentials_drive_acces.json")) 
+SERVICE_ACCOUNT_FILE =  Path(os.getenv("SERVICE_ACCOUNT_CRED", "/etc/secrets/credentials_drive_acces.json"))
 SCOPES = ['https://www.googleapis.com/auth/drive']
 logger = logging.getLogger(__name__)
 

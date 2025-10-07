@@ -32,3 +32,4 @@ credentials_drive_acces.json
 *.lock
 
 *postgresql:
+*.idea

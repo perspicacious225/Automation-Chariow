@@ -1,0 +1,46 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Résumé des Relances{% endblock %}
+{% block body_class %}page-relances-summary{% endblock %}
+
+{% block head_extra %}
+    <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
+{% endblock %}
+
+{% block content %}
+    <div style="display: flex; justify-content: space-between; margin-top: 15px;margin-bottom: 10px;">
+    <h1 class="page-title">Clients avec Relances Programmées</h1>
+    <a class="btn ghost" href="{{ url_for('dashboard.templates_products') }}">← Retour</a>
+    </div>
+ 
+
+    <div class="card">
+        <table class="results-table">
+            <thead>
+                <tr>
+                    <th>Contacts Clients</th>
+                    <th>Nombre de relances</th>
+                    <th>Prochaine relance le</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for contact in contacts %}
+                    <tr>
+                        <td>{{ contact.contact_key }}</td>
+                        <td>{{ contact.relance_count }}</td>
+                        <td>{{ contact.next_relance_at.strftime('%Y-%m-%d %H:%M') if contact.next_relance_at else 'N/A' }}</td>
+                        <td>
+                            <a class="btn primary" href="{{ url_for('dashboard.manage_relances_for_contact', contact_key=contact.contact_key) }}">
+                                Voir les détails
+                            </a>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr>
+                        <td colspan="4" style="text-align: center; padding: 20px;">🎉 Aucune relance en attente.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endblock %}

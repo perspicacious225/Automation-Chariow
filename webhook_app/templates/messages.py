@@ -251,14 +251,17 @@ TEMPLATES_WHATSAPP = {
 
     "relance_t6h": (
         "Bonjour {customer_first_name} 😊\n"
-        "Je reviens vers vous concernant votre commande. Je sais qu'on peut parfois hésiter, mais sachez que ma priorité est votre succès. Ma garantie perso : si vous avez besoin d'aide, c'est moi qui vous réponds directement.\n"
+        "Je reviens vers vous concernant votre commande.\n"
+        "Je sais qu'on peut parfois hésiter, mais sachez que ma priorité est votre succès.\n"
+        "Ma garantie perso : si vous avez besoin d'aide, c'est moi qui vous réponds directement.\n"
         "Votre produit *{product_name}* est toujours disponible ici :\n"
         "👉 {checkout_url}"
     ),
 
     "relance_t23h": (
         "{customer_first_name}, attention ! ⚠️\n"
-        "Dernier rappel : l'offre spéciale sur votre produit *{product_name}* se termine ce soir. Ne passez pas à côté de ses conditions avantageuses !\n"
+        "Dernier rappel : l'offre spéciale sur votre produit *{product_name}* se termine ce soir.\n"
+        "Ne passez pas à côté de ses conditions avantageuses !\n"
         "C'est votre dernière chance.\n"
         "👉 {checkout_url}"
     ),

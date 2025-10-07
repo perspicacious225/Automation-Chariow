@@ -367,6 +367,72 @@ def claim_scheduled_job(job_id: int) -> bool:
         )
         return (rc or 0) == 1
 
+# ------- delete relance----- #
+
+
+def get_pending_relances_by_contact():
+    """
+    Récupère un résumé des relances en attente, groupé par client (contact_key).
+    """
+    sql = """
+        SELECT
+            contact_key,
+            COUNT(*) AS relance_count,
+            MIN(due_at) AS next_relance_at
+        FROM scheduled_notifications
+        WHERE sent_at IS NULL AND contact_key IS NOT NULL AND contact_key <> ''
+        GROUP BY contact_key
+        ORDER BY MIN(due_at) ASC;
+    """
+    with get_connection(readonly=True) as conn:
+        return execute_with_retry(conn, sql, fetch="all") or []
+
+
+def get_pending_relances(contact_key: str = None):
+    """
+    Récupère les notifications programmées, avec un filtre optionnel par contact_key.
+    """
+    params = []
+    sql = """
+        SELECT id, sale_id, template_type, due_at, contact_key, product_id, error
+        FROM scheduled_notifications
+        WHERE sent_at IS NULL
+    """
+    if contact_key:
+        sql += " AND contact_key = %s"
+        params.append(contact_key)
+    
+    sql += " ORDER BY due_at ASC;"
+    
+    with get_connection(readonly=True) as conn:
+        return execute_with_retry(conn, sql, params, fetch="all") or []
+    
+def update_relance_due_at(job_id: int, new_due_at):
+    """
+    Met à jour la date d'échéance (due_at) d'une notification programmée.
+    """
+    # On s'assure que new_due_at est un objet datetime si c'est une chaîne
+    if isinstance(new_due_at, str):
+        from datetime import datetime
+        new_due_at = datetime.fromisoformat(new_due_at)
+
+    sql = """
+        UPDATE scheduled_notifications
+        SET due_at = %s
+        WHERE id = %s AND sent_at IS NULL;
+    """
+    with get_connection() as conn:
+        return execute_with_retry(conn, sql, (new_due_at, job_id))
+
+def cancel_relance_by_id(job_id: int):
+    """
+    Supprime une notification programmée de la file d'attente par son ID.
+    """
+    sql = "DELETE FROM scheduled_notifications WHERE id = %s AND sent_at IS NULL;"
+    with get_connection() as conn:
+        return execute_with_retry(conn, sql, (job_id,))
+
+
 
 def mark_scheduled_error(sched_id: int, error: str):
     with get_connection() as conn:
@@ -386,6 +452,8 @@ def get_drive_mappings(product_id: str) -> list[str]:
         rows = execute_with_retry(conn, sql, (product_id,), fetch="all") or []
         # Retourne une liste simple des IDs de dossier
         return [row['drive_folder_id'] for row in rows]
+    
+
 
 
 # --------------------------- Processed + notifications ---------------------------

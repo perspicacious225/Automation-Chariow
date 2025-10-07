@@ -1,5 +1,5 @@
 # webhook_app/admin/dashboard.py
-from flask import Blueprint, jsonify, render_template, request, Response, redirect, make_response, url_for, abort
+from flask import Blueprint, jsonify, render_template, request, Response, redirect, make_response, url_for, abort, flash
 from flask_login import login_required, current_user
 from functools import wraps
 import os, csv, io, html as _html
@@ -480,6 +480,49 @@ def edit_template():
         "pid_prefill": pid_prefill
     }
     return render_template("dashboard/edit_template.html", **ctx)
+
+
+
+from webhook_app.database_pg import (
+    get_pending_relances_by_contact, 
+    get_pending_relances,
+    cancel_relance_by_id,
+    update_relance_due_at
+)
+
+@dashboard_bp.route("/relances")
+@admin_required
+def manage_relances_summary():
+    contacts_with_relances = get_pending_relances_by_contact()
+    return render_template("dashboard/relances_summary.html", contacts=contacts_with_relances)
+
+
+@dashboard_bp.route("/relances/<contact_key>", methods=["GET", "POST"])
+@admin_required
+def manage_relances_for_contact(contact_key):
+    if request.method == "POST":
+        action = request.form.get("action")
+        job_id = request.form.get("job_id")
+
+        if action == "delete" and job_id:
+            cancel_relance_by_id(int(job_id))
+        
+        elif action == "update" and job_id:
+            new_due_at_str = request.form.get(f"due_at_{job_id}")
+            if new_due_at_str:
+                try:
+                    update_relance_due_at(int(job_id), new_due_at_str)
+                except ValueError:
+                
+                    flash("Format de date invalide.", "error")
+
+        return redirect(url_for("dashboard.manage_relances_for_contact", contact_key=contact_key))
+
+    pending_relances = get_pending_relances(contact_key=contact_key)
+    return render_template("dashboard/relances_detail.html", 
+                           relances=pending_relances, 
+                           contact_key=contact_key)
+
 
 
 @dashboard_bp.route("/templates/delete", methods=["POST"])

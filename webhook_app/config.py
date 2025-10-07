@@ -56,14 +56,14 @@ class Config:
     SENDER_EMAIL   = os.getenv("SENDER_EMAIL")
 
     # ==== Anti-spam (client + produit) ====
-    # Fenêtre anti-redémarrage d'une nouvelle cadence pour le même contact+produit (en minutes)
+    # Fenêtre anti-redémarrage d'une nouvelle cadence pour le même contact+produit 
     NOTIFY_DEDUPE_WINDOW_MINUTES = int(os.getenv("NOTIFY_DEDUPE_WINDOW_MINUTES", "0") or "0")
     if NOTIFY_DEDUPE_WINDOW_MINUTES == 0:
         # rétro-compat : jours -> minutes
         NOTIFY_DEDUPE_WINDOW_MINUTES = int(os.getenv("NOTIFY_DEDUPE_WINDOW_DAYS", "0") or "0") * 1440
 
     # Politique quand un nouveau sale_id arrive alors qu'une cadence est active :
-    # - "refresh": met à jour les jobs non envoyés avec le dernier sale_id/checkout_url (recommandé)
+    # - "refresh": met à jour les jobs non envoyés avec le dernier sale_id/checkout_url
     # - "ignore" : ne rien faire (la cadence actuelle continue telle quelle)
     CADENCE_REFRESH_POLICY = os.getenv("CADENCE_REFRESH_POLICY", "refresh").strip().lower()
 
@@ -71,7 +71,7 @@ class Config:
     DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN")
 
     # --- A/B split des timings (utilisé par Notifier) ---
-    AB_TEST_SPLIT_PERCENT = int(os.getenv("AB_TEST_SPLIT_PERCENT", "50"))  # % dans le bras B (0..100)
+    AB_TEST_SPLIT_PERCENT = int(os.getenv("AB_TEST_SPLIT_PERCENT", "50")) 
 
     # --- Seuils d'alertes (utilisés par services/alerts.py) ---
     ALERT_EMAILS = [
@@ -87,9 +87,9 @@ class Config:
 # ===== Strategy parameters =====
 # RELANCE_DELAYS = {
 #     "t30": 1,
-#     "t6h": 2,
-#     "t23h": 3,
-#     "t47h": 4
+#     "t6h": 3,
+#     "t23h": 5,
+#     "t47h": 6
 # }
 # Valeurs PROD recommandées :
 RELANCE_DELAYS = {
@@ -103,18 +103,18 @@ RELANCE_DELAYS = {
 RELANCE_DELAYS_A = RELANCE_DELAYS  # bras contrôle
 
 # RELANCE_DELAYS_B = {
-#     "t30": 1,      
-#     "t6h": 2,
-#     "t23h": 3,
-#     "t47h": 4,
+#     "t30": 1,
+#     "t6h": 3,
+#     "t23h": 5,
+#     "t47h": 6
 # }
 
 
 RELANCE_DELAYS_B = {
-    "t30": 10,       # minutes
-    "t6h": 4*60,
-    "t23h": 18*60,
-    "t47h": 36*60,
+    "t30": 5,       # minutes
+    "t6h": 6*60,
+    "t23h": 20*60,
+    "t47h": 40*60,
 }
 
 PRICE_CURRENT = int(os.getenv("PRICE_CURRENT", "5000"))
