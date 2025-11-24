@@ -2,9 +2,11 @@ import os
 import json
 import base64
 import logging
-from email.message import EmailMessage
-from email.utils import formataddr
 from pathlib import Path
+
+from email.utils import formataddr
+from email.message import EmailMessage
+
 
 from filelock import FileLock
 from google.auth import exceptions as gauth_exceptions
@@ -13,8 +15,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-# Assurez-vous que ce chemin d'importation est correct pour votre projet
 from webhook_app.services.whatsapp import WhatsAppService
+
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ SENDER_NAME  = os.getenv("SENDER_NAME", "Digitech Hub")
 
 APP_ENV = os.getenv("APP_ENV", os.getenv("FLASK_ENV", "production")).lower()
 
-# --- Instanciation des services ---
+# Instanciation des services---
 whatsapp_service = WhatsAppService()
 
 
@@ -52,7 +54,7 @@ class EmailService:
 
         lock = FileLock(str(GMAIL_TOKEN_PATH) + ".lock")
         with lock:
-            # 1) Seed initial depuis l'env (utile sur Render au 1er boot)
+            # Seed initial depuis l'env 
             try:
                 if GMAIL_TOKEN_JSON and not os.path.exists(GMAIL_TOKEN_PATH):
                     json.loads(GMAIL_TOKEN_JSON)  # Sanity-check
@@ -74,10 +76,10 @@ class EmailService:
                         pass
                     self.creds = None
 
-            # 3) Rafraîchir ou créer si le token est invalide/absent
+            # 3) Rafraîchir ou créer si le token est invalide ou absent
             if not self.creds or not self.creds.valid:
                 if self.creds and self.creds.expired and getattr(self.creds, "refresh_token", None):
-                    # Cas 1 : Token expiré mais rafraîchissable
+                    # 1er cas Token expiré mais rafraîchissable
                     try:
                         self.creds.refresh(Request())
                         with open(GMAIL_TOKEN_PATH, "w") as f:
@@ -85,11 +87,12 @@ class EmailService:
                         logger.info("Token Gmail rafraîchi et écrit dans %s", GMAIL_TOKEN_PATH)
                     except gauth_exceptions.RefreshError as e:
                         if "invalid_grant" in str(e).lower():
-                            # Cas 2 : Le refresh_token est mort (erreur critique)
+                            # Cas 2 Le refresh_token est mort 
+
                             admin_phone = os.getenv("ADMIN_PHONE_NUMBER")
 
                             if GMAIL_TOKEN_JSON:
-                                # Tentative d'auto-réparation
+                                # Tentative d'auto-reparation
                                 logger.warning("RefreshError invalid_grant → reseed depuis GMAIL_TOKEN_JSON et retry.")
                                 with open(GMAIL_TOKEN_PATH, "w") as f:
                                     f.write(GMAIL_TOKEN_JSON)
@@ -99,7 +102,7 @@ class EmailService:
                                     f.write(self.creds.to_json())
                                 logger.info("Reseed+refresh OK → nouveau token écrit dans %s", GMAIL_TOKEN_PATH)
 
-                                # Envoi de la notification de succès de l'auto-réparation
+                                # Envoi de la notification de succès de l'auto-reparation
                                 if admin_phone:
                                     success_message = (
                                         "✅ INFO AUTOMATISATION CHARIOW ✅\n\n"
@@ -112,14 +115,15 @@ class EmailService:
                                         logger.error(f"Échec de l'envoi de la notification de succès WhatsApp : {whatsapp_error}")
 
                             else:
-                                # Échec de l'auto-réparation, envoi de l'alerte critique
+                                # Échec de l'auto reparation, envoi de l'alerte critique par Whatsapp à l'admin
                                 if admin_phone:
                                     failure_message = (
                                         "🚨 ALERTE CRITIQUE CHARIOW 🚨\n\n"
                                         "Le token de l'API Gmail est invalide (invalid_grant)\n"
                                         "ET la tentative d'auto-réparation a échoué (pas de token de secours).\n\n"
                                         "🔴 **L'application est ARRÊTÉE** et l'envoi d'emails ne fonctionne plus. 🔴\n\n"
-                                        "Action manuelle urgente requise."
+                                        "Action manuelle urgente requise.\n"
+                                        "Régénère un token.json en local et colle-le dans GMAIL_TOKEN_JSON de render."
                                     )
                                     try:
                                         logger.critical("TOKEN GMAIL MORT ! Envoi de l'alerte critique WhatsApp à l'admin.")
@@ -127,20 +131,20 @@ class EmailService:
                                     except Exception as whatsapp_error:
                                         logger.error(f"Échec de l'envoi de l'alerte critique WhatsApp : {whatsapp_error}")
                                 
-                                # Le programme s'arrête car il ne peut pas se réparer
+                                
                                 raise RuntimeError(
                                     "RefreshError invalid_grant et aucun GMAIL_TOKEN_JSON fourni. "
-                                    "Régénère un token.json en local et colle-le dans GMAIL_TOKEN_JSON."
+                                    "Régénère un token.json en local et colle-le dans GMAIL_TOKEN_JSON de render."
                                 ) from e
                         else:
-                            # Gère les autres erreurs de rafraîchissement
+                            
                             raise
                     except Exception:
                         logger.exception("Impossible d'écrire le token rafraîchi.")
                 else:
-                    # Cas 3 : Pas de token valide, il faut en créer un
+                    # 3e cas Pas de token valide, il faut en créer un
                     if APP_ENV in {"prod", "production"}:
-                        # En production, on ne peut pas être interactif, on se base sur GMAIL_TOKEN_JSON
+               
                         if not GMAIL_TOKEN_JSON:
                              raise RuntimeError(
                                 "Token Gmail absent/invalide en production. "
@@ -161,7 +165,7 @@ class EmailService:
                                 "Re-générer en local avec access_type=offline + prompt=consent."
                             )
                     else:
-                        # En local, on lance le flux de connexion interactif
+                        # Lancer le flux de connexion en local
                         if not os.path.exists(GMAIL_CLIENT_SECRET_PATH):
                             raise RuntimeError(f"Client secret introuvable: {GMAIL_CLIENT_SECRET_PATH}")
                         flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CLIENT_SECRET_PATH, SCOPES)
@@ -179,7 +183,7 @@ class EmailService:
         try:
             msg = EmailMessage()
             msg["Subject"] = subject
-            msg["From"] = formataddr((SENDER_NAME, SENDER_EMAIL))
+            msg["From"] = formataddr((SENDER_NAME, SENDER_EMAIL)) # type: ignore
             msg["To"] = recipient
 
             text = plain_fallback or (html_body or "").replace("<br>", "\n").replace("<br/>", "\n")

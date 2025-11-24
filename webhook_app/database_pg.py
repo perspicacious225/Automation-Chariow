@@ -1,84 +1,231 @@
 import os, time, logging, datetime, json
+from datetime import datetime
+
+
 from contextlib import contextmanager
 from typing import Any, Iterable, Optional
-
 import psycopg2
-from psycopg2 import pool
 from psycopg2.extras import RealDictCursor, Json
+from psycopg2 import pool, OperationalError
+
 
 from webhook_app.config import Config
 
 logger = logging.getLogger(__name__)
 
-_POOL: Optional[pool.SimpleConnectionPool] = None
+# _POOL: Optional[pool.SimpleConnectionPool] = None
+
+_POOL: Optional[pool.ThreadedConnectionPool] = None
+_POOL_INIT_TIME: Optional[float] = None
+
+
+def _build_dsn():
+    """Construit le DSN PostgreSQL"""
+    dsn = os.getenv("DATABASE_URL")
+    
+    if not dsn:
+        host = os.getenv("PGHOST", "localhost")
+        port = int(os.getenv("PGPORT", "5432"))
+        db = os.getenv("PGDATABASE", "postgres")
+        user = os.getenv("PGUSER", "postgres")
+        pw = os.getenv("PGPASSWORD", "postgres")
+        dsn = f"postgresql://{user}:{pw}@{host}:{port}/{db}?sslmode=require"
+    
+    return dsn
 
 
 def init_pool():
-    global _POOL
+    """Initialise le pool de connexions pour ce processus worker"""
+    global _POOL, _POOL_INIT_TIME
+    
+    # Si un pool existe déjà dans ce processus, le fermer d'abord
     if _POOL is not None:
-        return _POOL
+        try:
+            _POOL.closeall()
+        except Exception as e:
+            logger.warning("Erreur lors de la fermeture du pool existant: %s", e)
+        _POOL = None
     
-    dsn = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or getattr(Config, "POSTGRES_URL", None)
-    
-    if not dsn:
-        # Build from discrete vars if provided 
-        host = os.getenv("PGHOST") or "localhost"
-        port = int(os.getenv("PGPORT", "5432"))
-        db   = os.getenv("PGDATABASE") or "postgres"
-        user = os.getenv("PGUSER") or "postgres"
-        pw   = os.getenv("PGPASSWORD") or "postgres"
-        dsn = f"postgresql://{user}:{pw}@{host}:{port}/{db}"
-
+    dsn = _build_dsn()
     minconn = int(os.getenv("PG_MINCONN", "1"))
     maxconn = int(os.getenv("PG_MAXCONN", "10"))
-    _POOL = pool.SimpleConnectionPool(minconn, maxconn, dsn=dsn, keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=5)
-    logger.info("PostgreSQL pool initialisé (%s..%s)", minconn, maxconn)
+    
+    # ThreadedConnectionPool est plus sûr avec Celery
+    _POOL = pool.ThreadedConnectionPool(
+        minconn,
+        maxconn,
+        dsn=dsn,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=5,
+        keepalives_count=5,
+        connect_timeout=10 
+    )
+    
+    _POOL_INIT_TIME = time.time()
+    logger.info(
+        "PostgreSQL pool initialisé pour PID %s (%s..%s)", 
+        os.getpid(), minconn, maxconn
+    )
     return _POOL
 
 
+
 def close_pool():
-    global _POOL
+    """Ferme le pool de connexions"""
+    global _POOL, _POOL_INIT_TIME
     if _POOL is not None:
-        _POOL.closeall()
-        _POOL = None
-        logger.info("PostgreSQL pool fermé")
+        try:
+            _POOL.closeall()
+            logger.info("PostgreSQL pool fermé pour PID %s", os.getpid())
+        except Exception as e:
+            logger.error("Erreur lors de la fermeture du pool: %s", e)
+        finally:
+            _POOL = None
+            _POOL_INIT_TIME = None
+
+def _check_pool_age():
+    """Recycle le pool s'il est trop vieux (équivalent de pool_recycle)"""
+    global _POOL_INIT_TIME
+    max_age = int(os.getenv("PG_POOL_RECYCLE", "3600"))  # 1 heure par défaut
+    
+    if _POOL_INIT_TIME and (time.time() - _POOL_INIT_TIME) > max_age:
+        logger.info("Pool trop ancien, recyclage...")
+        close_pool()
+        init_pool()
+
+
+def _test_connection(conn) -> bool:
+    """Teste si une connexion est vivante (équivalent de pool_pre_ping)"""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            return True
+    except (OperationalError, psycopg2.InterfaceError, psycopg2.DatabaseError):
+        return False
+
 
 
 @contextmanager
-def get_connection(readonly: bool = False):
+def get_connection(readonly: bool = False, autocommit: bool = True):
     if _POOL is None:
         init_pool()
+    
+    _check_pool_age()
     assert _POOL is not None
-    conn = _POOL.getconn()
-    try:
-        # Active l'autocommit (DDL possible immédiatement)
-        conn.autocommit = True
-        # Évite de marquer la session en READ ONLY pour ne pas brider les DDL
-        # Les requêtes read-only n'ont pas besoin d'un flag serveur read-only ici.
-        yield conn
-    finally:
-        _POOL.putconn(conn)
+    
+    conn = None
+    max_attempts = 3
+
+    for attempt in range(max_attempts):
+        try:
+            conn = _POOL.getconn()
+           
+            conn.autocommit = autocommit
+
+            # Test de vie de la connexion après autocommit
+            if not _test_connection(conn):
+                logger.warning(
+                    "Connexion morte détectée (tentative %s/%s)", 
+                    attempt + 1, max_attempts
+                )
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                _POOL.putconn(conn, close=True)
+                conn = None
+                continue
+
+            # Ne pas appeler SET TRANSACTION ici si autocommit est activé
+            if not autocommit and readonly:
+                with conn.cursor() as cur:
+                    cur.execute("SET TRANSACTION READ ONLY")
+
+            yield conn
+            return
+
+        except Exception as e:
+            logger.error("Erreur lors de l'obtention de la connexion: %s", e)
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(0.1 * (2 ** attempt))
+
+        finally:
+            if conn is not None:
+                try:
+                    _POOL.putconn(conn)
+                except Exception as e:
+                    logger.error("Erreur lors du retour de connexion au pool: %s", e)
 
 
-def execute_with_retry(conn, sql: str, params: Iterable[Any] | None = None, *, fetch: str | None = None):
+def execute_with_retry(
+    conn, 
+    sql: str, 
+    params: Iterable[Any] | None = None, 
+    *, 
+    fetch: str | None = None
+):
+    """
+    Exécute une requête SQL avec retry sur erreurs transitoires
+    """
     attempts = int(os.getenv("PG_EXEC_RETRIES", "3"))
     base_delay = float(os.getenv("PG_EXEC_BASE_DELAY_MS", "100")) / 1000.0
+    
     for i in range(attempts):
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql, params or ())
+                
                 if fetch == "one":
                     return cur.fetchone()
                 if fetch == "all":
                     return cur.fetchall()
                 return cur.rowcount
+                
         except psycopg2.Error as e:
             msg = str(e).lower()
-            # Retry on common transient errors
-            if any(x in msg for x in ["deadlock", "timeout", "could not serialize", "connection reset", "connection refused", "terminating connection"]):
-                time.sleep(base_delay * (2 ** i))
-                continue
+            error_code = getattr(e, 'pgcode', None)
+            
+            # Liste étendue incluant EOF et SSL errors
+            transient_errors = [
+                "deadlock",
+                "timeout",
+                "could not serialize",
+                "connection reset",
+                "connection refused",
+                "terminating connection",
+                "eof detected",      
+                "ssl syscall error",  
+                "server closed",      
+                "connection closed",  
+                "broken pipe"         
+            ]
+            
+            is_transient = any(err in msg for err in transient_errors)
+            
+            # Codes d'erreur PostgreSQL pour retry
+            retryable_codes = ['40001', '40P01', '57014', '57P01', '08003', '08006']
+            is_retryable_code = error_code in retryable_codes
+            
+            if is_transient or is_retryable_code:
+                if i < attempts - 1:
+                    delay = base_delay * (2 ** i)
+                    logger.warning(
+                        "Erreur transitoire détectée (tentative %s/%s): %s. "
+                        "Retry dans %.2fs...", 
+                        i + 1, attempts, str(e)[:100], delay
+                    )
+                    time.sleep(delay)
+                    continue
+            
+            # Si ce n'est pas une erreur transitoire ou dernier essai, raise
             raise
+    
+    
+    raise RuntimeError(f"Échec après {attempts} tentatives")
+
+
 def read_mappings_from_db():
     """Charge les mappings depuis la base de données et les groupe par produit."""
     sql = """
@@ -89,6 +236,7 @@ def read_mappings_from_db():
     """
     with get_connection(readonly=True) as conn:
         rows = execute_with_retry(conn, sql, fetch="all") or []
+
         # Convertit la liste de dictionnaires en un dictionnaire simple pour le template
         return {row['product_id']: row['folder_ids'] for row in rows}
     
@@ -114,9 +262,10 @@ def delete_mapping_from_db(product_id: str, folder_id: str):
     with get_connection() as conn:
         execute_with_retry(conn, sql, (product_id, folder_id))
 
-# --------------------------- Schema creation ---------------------------
+# Schema creation
 def ensure_all_schemas():
     with get_connection() as conn:
+
         # webhook_events
         execute_with_retry(conn, """
         CREATE TABLE IF NOT EXISTS webhook_events (
@@ -272,8 +421,70 @@ def ensure_all_schemas():
             );
             CREATE INDEX IF NOT EXISTS idx_mapping_product_id ON product_drive_mapping(product_id);
         """)
+        execute_with_retry(conn, """
+            CREATE TABLE IF NOT EXISTS direct_campaigns (
+                id SERIAL PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending', -- pending, running, completed, failed
+                scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                started_at TIMESTAMP WITH TIME ZONE,
+                finished_at TIMESTAMP WITH TIME ZONE,
+                subject TEXT NOT NULL,
+                html_body TEXT NOT NULL,
+                recipients JSONB NOT NULL,
+                error_message TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_campaigns_status_scheduled ON direct_campaigns(status, scheduled_at);
+                           
+            ALTER TABLE direct_campaigns
+            ADD COLUMN IF NOT EXISTS segment_name TEXT,
+            ADD COLUMN IF NOT EXISTS filter_product_id TEXT,
+            ADD COLUMN IF NOT EXISTS filter_start_date DATE,
+            ADD COLUMN IF NOT EXISTS filter_end_date DATE;
+        """)
 
+        # creative_briefs
+        execute_with_retry(conn, """
+            CREATE TABLE IF NOT EXISTS creative_briefs (
+                id SERIAL PRIMARY KEY,
+                -- Entrées P.D.A.
+                persona TEXT NOT NULL,
+                desire TEXT NOT NULL,
+                awareness TEXT NOT NULL,
+                angle TEXT NOT NULL,          -- Le concept/angle publicitaire résultant
+                
+                -- Instructions et Résultats
+                visual_instructions TEXT,     -- Mots-clés pour visuels, URLs, 
+                generated_script TEXT,        -- Le script généré par l'IA 
+                generated_audio_url TEXT,     -- L'URL de la voix off 
+                final_video_url TEXT,         -- L'URL de la vidéo finale 
 
+                -- Suivi
+                status TEXT NOT NULL DEFAULT 'pending', -- pending, script_generated, audio_generated, video_generated, failed
+                error_message TEXT,           -- Pour stocker les erreurs éventuelles
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+            -- Index pour retrouver rapidement les briefs en attente
+            CREATE INDEX IF NOT EXISTS idx_briefs_status ON creative_briefs(status);
+
+            -- Trigger pour mettre à jour updated_at automatiquement (Optionnel mais bonne pratique)
+            CREATE OR REPLACE FUNCTION update_updated_at_column()
+            RETURNS TRIGGER AS $$
+            BEGIN
+            NEW.updated_at = NOW(); 
+            RETURN NEW;
+            END;
+            $$ language 'plpgsql';
+
+            DROP TRIGGER IF EXISTS update_creative_briefs_updated_at ON creative_briefs;
+            CREATE TRIGGER update_creative_briefs_updated_at
+            BEFORE UPDATE ON creative_briefs
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();
+        """)
+
+import datetime
 # --------------------------- Helpers ---------------------------
 def _parse_timestamp(value) -> Optional[datetime.datetime]:
     if value is None:
@@ -370,22 +581,59 @@ def claim_scheduled_job(job_id: int) -> bool:
 # ------- delete relance----- #
 
 
-def get_pending_relances_by_contact():
+def get_pending_relances_by_contact(search_term: str = None, page: int = 1, per_page: int = 20):
     """
-    Récupère un résumé des relances en attente, groupé par client (contact_key).
+    Récupère un résumé paginé des relances en attente, groupé par client,
+    avec une option de recherche par email (contact_key).
     """
+    params = []
+    count_params = []
+    
+    base_sql = """
+        FROM scheduled_notifications
+        WHERE sent_at IS NULL AND contact_key IS NOT NULL AND contact_key <> ''
+    """
+    
+    if search_term:
+        base_sql += " AND contact_key ILIKE %s"
+        # On ajoute les wildcards '%' pour une recherche partielle
+        params.append(f"%{search_term}%")
+        count_params.append(f"%{search_term}%")
+
+    # --- Requête pour le nombre total de contacts ---
+    count_sql = "SELECT COUNT(DISTINCT contact_key) " + base_sql
+    
+    # --- Requête pour les résultats de la page ---
     sql = """
         SELECT
             contact_key,
             COUNT(*) AS relance_count,
             MIN(due_at) AS next_relance_at
-        FROM scheduled_notifications
-        WHERE sent_at IS NULL AND contact_key IS NOT NULL AND contact_key <> ''
+    """ + base_sql + """
         GROUP BY contact_key
-        ORDER BY MIN(due_at) ASC;
+        ORDER BY MIN(due_at) ASC
+        LIMIT %s OFFSET %s
     """
+    offset = (page - 1) * per_page
+    params.extend([per_page, offset])
+
     with get_connection(readonly=True) as conn:
-        return execute_with_retry(conn, sql, fetch="all") or []
+        total_count_row = execute_with_retry(conn, count_sql, count_params, fetch="one")
+        total_count = total_count_row['count'] if total_count_row else 0
+        
+        contacts = execute_with_retry(conn, sql, params, fetch="all") or []
+        
+        return contacts, total_count
+
+def cancel_relances_for_contacts(contact_keys: list):
+    """Supprime toutes les relances programmées pour une liste de contacts."""
+    if not contact_keys:
+        return 0
+    
+    # La syntaxe '= ANY(%s)' est une manière efficace de faire un 'IN' avec psycopg2
+    sql = "DELETE FROM scheduled_notifications WHERE contact_key = ANY(%s) AND sent_at IS NULL;"
+    with get_connection() as conn:
+        return execute_with_retry(conn, sql, (contact_keys,))
 
 
 def get_pending_relances(contact_key: str = None):
@@ -434,6 +682,10 @@ def cancel_relance_by_id(job_id: int):
 
 
 
+
+
+
+
 def mark_scheduled_error(sched_id: int, error: str):
     with get_connection() as conn:
         execute_with_retry(conn, "UPDATE scheduled_notifications SET error = %s WHERE id = %s", (error, sched_id))
@@ -453,6 +705,227 @@ def get_drive_mappings(product_id: str) -> list[str]:
         # Retourne une liste simple des IDs de dossier
         return [row['drive_folder_id'] for row in rows]
     
+
+
+## direct campagn settings
+
+def fetch_due_campaigns(limit: int = 10):
+    """Récupère les campagnes manuelles qui sont dues."""
+    sql = """
+        SELECT * FROM direct_campaigns
+        WHERE status = 'pending' AND scheduled_at <= NOW()
+        ORDER BY scheduled_at ASC
+        LIMIT %s;
+    """
+    with get_connection(readonly=True) as conn:
+        return execute_with_retry(conn, sql, (limit,), fetch="all") or []
+
+def claim_campaign(campaign_id: int) -> bool:
+    """Marque une campagne comme 'running' pour éviter un double traitement."""
+    sql = """
+        UPDATE direct_campaigns
+        SET status = 'running', started_at = NOW()
+        WHERE id = %s AND status = 'pending';
+    """
+    with get_connection() as conn:
+        row_count = execute_with_retry(conn, sql, (campaign_id,))
+        return row_count == 1
+
+def update_campaign_status(campaign_id: int, status: str, error_message: str = None):
+    """Met à jour le statut final d'une campagne (completed ou failed)."""
+    sql = """
+        UPDATE direct_campaigns
+        SET status = %s, finished_at = NOW(), error_message = %s
+        WHERE id = %s;
+    """
+    with get_connection() as conn:
+        execute_with_retry(conn, sql, (status, error_message, campaign_id))
+
+def get_customer_details_for_personalization(contact_key: str):
+    """Récupère les détails d'un client pour personnaliser l'email."""
+    # Cette requête peut être adaptée si vous avez besoin de plus d'infos
+    sql = "SELECT contact_key, first_seen, country, orders_count, rfm_segment FROM dim_customer WHERE contact_key = %s LIMIT 1;"
+    with get_connection(readonly=True) as conn:
+        return execute_with_retry(conn, sql, (contact_key,), fetch="one")
+
+### campaign creating
+
+# def create_direct_campaign(subject: str | None , html_body: str | None, recipients: list, scheduled_at):
+#     """Insère une nouvelle campagne manuelle dans la base de données."""
+#     if isinstance(scheduled_at, str):
+#         from datetime import datetime
+#         scheduled_at = datetime.fromisoformat(scheduled_at)
+    
+#     sql = """
+#         INSERT INTO direct_campaigns (subject, html_body, recipients, scheduled_at)
+#         VALUES (%s, %s, %s, %s)
+#         RETURNING id;
+#     """
+#     with get_connection() as conn:
+#         row = execute_with_retry(conn, sql, (subject, html_body, Json(recipients), scheduled_at), fetch="one")
+#         return row['id'] if row else None
+    
+
+def create_direct_campaign(subject: str | None, html_body: str | None, recipients: list, scheduled_at,
+                           segment_name: str | None = None, filter_product_id: str | None = None,
+                           filter_start_date: str | None = None, filter_end_date: str | None = None):
+    """Insère une nouvelle campagne manuelle, incluant les infos de segmentation."""
+    if isinstance(scheduled_at, str):
+        from datetime import datetime
+        scheduled_at = datetime.fromisoformat(scheduled_at)
+
+    sql = """
+        INSERT INTO direct_campaigns (
+            subject, html_body, recipients, scheduled_at,
+            segment_name, filter_product_id, filter_start_date, filter_end_date
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id;
+    """
+    params = (
+        subject, html_body or "", Json(recipients), scheduled_at,
+        segment_name, filter_product_id, filter_start_date, filter_end_date
+    )
+    with get_connection() as conn:
+        row = execute_with_retry(conn, sql, params, fetch="one")
+        return row['id'] if row else None
+
+
+def calculate_campaign_conversion(campaign_id: int, conversion_window_hours: int = 720):
+    """
+    Calcule le nombre de conversions pour une campagne donnée dans une fenêtre de temps.
+    Une conversion est un achat 'completed' par un destinataire après la fin de la campagne.
+    """
+    sql = """
+        WITH campaign_info AS (
+            -- Étape 1: Isoler les informations de notre campagne
+            SELECT 
+                jsonb_array_elements_text(recipients) AS recipient_email,
+                finished_at
+            FROM direct_campaigns
+            WHERE id = %(campaign_id)s
+        )
+        -- Étape 2: Compter les ventes correspondantes
+        SELECT COUNT(DISTINCT fs.contact_key) AS conversion_count
+        FROM fact_sales fs
+        JOIN campaign_info ci ON fs.contact_key = ci.recipient_email
+        WHERE 
+            fs.status = 'completed'
+            AND fs.completed_at > ci.finished_at
+            AND fs.completed_at <= ci.finished_at + INTERVAL '%(window)s hours';
+    """
+    params = {
+        'campaign_id': campaign_id,
+        'window': conversion_window_hours
+    }
+    
+    with get_connection(readonly=True) as conn:
+        result = execute_with_retry(conn, sql, params, fetch="one")
+        return result['conversion_count'] if result else 0
+
+def delete_campaign_by_id(campaign_id: int):
+    sql="DELETE FROM direct_campaigns WHERE id = %s;"
+    with get_connection() as conn:
+        return execute_with_retry(conn, sql, (campaign_id,))
+
+def get_all_template_types():
+    """Récupère une liste de tous les types de templates de message uniques."""
+    sql = "SELECT DISTINCT template_type FROM message_templates ORDER BY template_type;"
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(conn, sql, fetch="all") or []
+        return [row['template_type'] for row in rows]
+
+
+def get_confirmed_customer_emails(product_id: str | None, start_date: str | None, end_date: str | None):
+    """Récupère les emails des clients confirmés, avec filtres optionnels."""
+    params = []
+    sql = "SELECT DISTINCT email FROM fact_sales WHERE status = 'completed' AND email IS NOT NULL AND email <> ''"
+
+    if product_id:
+        sql += " AND product_id = %s"
+        params.append(product_id)
+    if start_date:
+        sql += " AND created_at >= %s"
+        params.append(start_date)
+    if end_date:
+        sql += " AND created_at <= %s"
+        params.append(end_date)
+
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(conn, sql, params, fetch="all") or []
+        return [row['email'] for row in rows]
+
+def get_unconverted_customer_emails(product_id: str | None, start_date: str | None, end_date: str | None):
+    """Récupère les emails des clients non convertis, avec filtres optionnels."""
+    params = []
+    sql = """
+        SELECT DISTINCT s1.email FROM fact_sales s1
+        WHERE s1.status IN ('abandoned', 'failed') AND s1.email IS NOT NULL AND s1.email <> ''
+        AND NOT EXISTS (
+            SELECT 1 FROM fact_sales s2
+            WHERE s2.contact_key = s1.contact_key AND s2.status = 'completed'
+        )
+    """
+
+    if product_id:
+        sql += " AND s1.product_id = %s"
+        params.append(product_id)
+    if start_date:
+        sql += " AND s1.created_at >= %s"
+        params.append(start_date)
+    if end_date:
+        sql += " AND s1.created_at <= %s"
+        params.append(end_date)
+    
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(conn, sql, params, fetch="all") or []
+        return [row['email'] for row in rows]
+
+def get_all_campaigns(search_term: str | None, page: int = 1, per_page: int = 20):
+    """
+    Récupère une page de campagnes manuelles, avec recherche et pagination.
+    Retourne les campagnes de la page et le nombre total de campagnes.
+    """
+    params = []
+    count_params = []
+    
+    # --- Requête pour le nombre total ---
+    count_sql = "SELECT COUNT(*) FROM direct_campaigns"
+    if search_term:
+        count_sql += " WHERE subject ILIKE %s"
+        # On ajoute les wildcards '%' pour une recherche partielle
+        count_params.append(f"%{search_term}%")
+    
+    # --- Requête pour les résultats de la page ---
+    sql = """
+        SELECT id, status, scheduled_at, started_at, finished_at, 
+               subject, error_message, jsonb_array_length(recipients) as recipient_count
+        FROM direct_campaigns
+    """
+    if search_term:
+        sql += " WHERE subject ILIKE %s"
+        params.append(f"%{search_term}%")
+    
+    sql += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+    offset = (page - 1) * per_page
+    params.extend([per_page, offset])
+
+    with get_connection(readonly=True) as conn:
+        # Exécuter les deux requêtes
+        total_count_row = execute_with_retry(conn, count_sql, count_params, fetch="one")
+        total_count = total_count_row['count'] if total_count_row else 0
+        
+        campaigns = execute_with_retry(conn, sql, params, fetch="all") or []
+        
+        return campaigns, total_count
+
+
+def get_campaign_by_id(campaign_id: int):
+    """Récupère les détails complets d'une campagne par son ID."""
+    sql = "SELECT * FROM direct_campaigns WHERE id = %s;"
+    with get_connection(readonly=True) as conn:
+        return execute_with_retry(conn, sql, (campaign_id,), fetch="one")
+
 
 
 
@@ -736,51 +1209,6 @@ def rfm_recompute():
             rec_days.append(recency_days); freqs.append(freq); mons.append(mon)
             tmp.append((r.get("contact_key"), recency_days, freq, mon, fs_dt, ls_dt))
 
-        def _quantiles(vals):
-            if not vals: return (0,0,0,0)
-            vs = sorted(vals)
-            def q(p):
-                i = max(0, min(len(vs)-1, int(round(p*(len(vs)-1)))))
-                return vs[i]
-            return (q(0.2), q(0.4), q(0.6), q(0.8))
-
-        rq, fq, mq = _quantiles(rec_days), _quantiles(freqs), _quantiles(mons)
-
-        def score_recency(d):
-            return 5 if d <= rq[0] else 4 if d <= rq[1] else 3 if d <= rq[2] else 2 if d <= rq[3] else 1
-
-        def score_quantile(x, qs):
-            return 1 if x <= qs[0] else 2 if x <= qs[1] else 3 if x <= qs[2] else 4 if x <= qs[3] else 5
-
-        def seg(r,f,m):
-            if r>=4 and f>=4 and m>=4: return "Champions"
-            if r>=4 and f>=3:          return "Fidèles"
-            if r>=3 and f>=2 and m>=3: return "Prometteurs"
-            if r<=2 and f>=3:          return "À réactiver"
-            if r<=2 and f<=2 and m<=2: return "À risque"
-            return "Standard"
-
-        # CORRECTION ICI: Ajouter 'conn' comme premier paramètre
-
-        for ck, rd, fqv, mv, fs_dt, ls_dt in tmp:
-            r = score_recency(rd); f = score_quantile(fqv, fq); m = score_quantile(mv, mq)
-            execute_with_retry(conn,  
-                """
-                INSERT INTO dim_customer(contact_key, first_seen, last_seen, country, orders_count, gmv_total,
-                                         rfm_recency_days, rfm_frequency, rfm_monetary, rfm_segment)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (contact_key) DO UPDATE SET
-                  first_seen=EXCLUDED.first_seen,
-                  last_seen=EXCLUDED.last_seen,
-                  orders_count=EXCLUDED.orders_count,
-                  gmv_total=EXCLUDED.gmv_total,
-                  rfm_recency_days=EXCLUDED.rfm_recency_days,
-                  rfm_frequency=EXCLUDED.rfm_frequency,
-                  rfm_monetary=EXCLUDED.rfm_monetary,
-                  rfm_segment=EXCLUDED.rfm_segment
-                """,
-                (ck, fs_dt, ls_dt, None, int(fqv), float(mv), float(rd), float(f), float(m), seg(r,f,m))
-            )
 
         def _quantiles(vals):
             if not vals: return (0,0,0,0)
@@ -972,3 +1400,86 @@ def get_template(product_id, template_type, channel):
             """,
             (template_type, channel), fetch="one")
         return dict(row) if row else None
+    
+
+
+
+    ######### AUTOMATION VIDEOS GENERATION 
+
+
+def get_brief_by_id(brief_id: int):
+    SQL = "SELECT persona, desire, awareness, angle, visual_instructions, status FROM creative_briefs WHERE id = %s;"
+    with get_connection(autocommit=False) as conn:
+        
+        return execute_with_retry(conn, SQL, (brief_id,), fetch="one")
+    
+def get_generated_script_by_id(bried_id: int):
+
+    SQL="SELECT generated_script FROM creative_briefs WHERE id= %s;"
+
+    with get_connection(autocommit=False) as conn:
+        return execute_with_retry(conn, SQL, (bried_id,), fetch="one")
+
+
+
+from typing import Optional
+
+def update_brief_script_and_status(brief_id: int, script: Optional[str] = None, status: Optional[str] = None, error_message: Optional[str] = None):
+    """
+    Met à jour le script généré, le statut et/ou le message d'erreur d'un brief.
+    """
+    updates = []
+    params = []
+
+    if script is not None:
+        updates.append("generated_script = %s")
+        params.append(script)
+    if status is not None:
+        updates.append("status = %s")
+        params.append(status)
+    if error_message is not None:
+        updates.append("error_message = %s")
+        params.append(error_message)
+    
+    updates.append("updated_at = NOW()")
+
+    if not updates: 
+        return 0
+
+    sql = f"UPDATE creative_briefs SET {', '.join(updates)} WHERE id = %s;"
+    params.append(brief_id) 
+
+    with get_connection() as conn:
+        execute_with_retry(conn, sql, tuple(params)) 
+        conn.commit()
+        return True
+
+
+
+def update_brief_audio_url_and_status(brief_id: int, generated_audio_url: Optional[str] = None, status: Optional[str] = None, error_message: Optional[str] = None):
+   
+    """Met à jour l'URL de l'audio et le statut d'un brief."""
+    updates = []
+    params = []
+
+    if generated_audio_url is not None:
+        updates.append("generated_audio_url = %s")
+        params.append(generated_audio_url)
+    if status is not None:
+        updates.append("status = %s")
+        params.append(status)
+    if error_message is not None:
+        updates.append("error_message = %s")
+        params.append(error_message)
+    
+    updates.append("updated_at = NOW()")
+
+    if not updates: 
+        return 0
+
+    sql = f"UPDATE creative_briefs SET {', '.join(updates)} WHERE id = %s;"
+    params.append(brief_id) 
+
+    with get_connection() as conn:
+        execute_with_retry(conn, sql, tuple(params))
+        conn.commit()

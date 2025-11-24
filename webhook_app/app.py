@@ -6,7 +6,7 @@ from webhook_app.admin.dashboard import dashboard_bp
 from webhook_app.database_pg import (
     Database,
     init_pool, close_pool, ensure_all_schemas,
-    save_webhook_raw, upsert_fact_from_webhook, rfm_recompute,
+    save_webhook_raw, upsert_fact_from_webhook, rfm_recompute,_check_pool_age
 )
 from webhook_app.drive_service import grant_access_for_sale
 
@@ -14,23 +14,185 @@ from flask_login import LoginManager
 from webhook_app.utils.auth_pg import ensure_users_schema, get_user_by_id
 
 
+from celery import Celery, chain
+from celery.signals import (
+    worker_process_init,
+    worker_process_shutdown,
+    task_prerun,
+    task_postrun
+)
+
+
 from webhook_app.config import Config
 from webhook_app.services.notifier import Notifier  
 from webhook_app.services.scheduler import start_scheduler
 from webhook_app.services.mailer import EmailService
 from webhook_app.models.sale import Sale
+from webhook_app.services.campaign_worker import start_campaign_worker
+
+logger = logging.getLogger(__name__)
+def make_celery(app: Flask) -> Celery:
+    """Crée et configure l'instance Celery avec gestion des connexions DB."""
+    
+    broker_url = app.config.get('CELERY_BROKER_URL', 'redis://172.23.232.56:6379/0')
+    result_backend_url = app.config.get('CELERY_RESULT_BACKEND', 'redis://172.23.232.56:6379/0')
+
+    celery = Celery(
+        app.import_name,
+        backend=result_backend_url,
+        broker=broker_url
+    )
+    
+    
+    # ✅ Configuration additionnelle pour la stabilité
+    celery.conf.update(
+        # Préfetch : nombre de tâches qu'un worker peut prendre à l'avance
+        worker_prefetch_multiplier=1,  
+        
+        # Timeout des tâches
+        task_soft_time_limit=600,     
+        task_time_limit=660,           
+        
+        # Reconnexion automatique
+        broker_connection_retry_on_startup=True,
+        broker_connection_retry=True,
+        broker_connection_max_retries=10,
+        
+        # Serialization
+        task_serializer='json',
+        accept_content=['json'],
+        result_serializer='json',
+        
+        # Acks après traitement (plus sûr)
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
+        
+        # Pool de workers
+        worker_pool='prefork',          # ou 'gevent' si vous utilisez gevent
+        worker_max_tasks_per_child=1000, # Recycle worker après 1000 tâches
+    )
+    
+    # ✅ Task de base avec contexte Flask
+    class ContextTask(celery.Task):
+        def __call__(self, *args: object, **kwargs: object) -> object:
+            with app.app_context():
+                return self.run(*args, **kwargs)
+    
+    celery.Task = ContextTask
+    
+    # ✅ IMPORTANT : Configuration des hooks de cycle de vie pour PostgreSQL
+    @worker_process_init.connect
+    def init_worker_db_pool(**kwargs):
+        """
+        Initialise un pool de connexions PostgreSQL dédié pour chaque worker process.
+        Exécuté une fois au démarrage de chaque worker.
+        """
+        logger.info(
+            "🚀 Initialisation du worker process %s - Création du pool PostgreSQL", 
+            os.getpid()
+        )
+        with app.app_context():
+            init_pool()
+    
+    @worker_process_shutdown.connect
+    def shutdown_worker_db_pool(**kwargs):
+        """
+        Ferme proprement le pool de connexions lors de l'arrêt du worker.
+        """
+        logger.info(
+            "🛑 Arrêt du worker process %s - Fermeture du pool PostgreSQL", 
+            os.getpid()
+        )
+        with app.app_context():
+            close_pool()
+    
+    @task_prerun.connect
+    def before_task_check_pool(**kwargs):
+        """
+        Avant chaque tâche, vérifie l'âge du pool et le recycle si nécessaire.
+        Équivalent de pool_recycle de SQLAlchemy.
+        """
+        task = kwargs.get('task')
+        task_id = kwargs.get('task_id')
+        
+        logger.debug(
+            "📋 Début tâche %s [%s] - PID %s", 
+            task.name if task else 'unknown',
+            task_id[:8] if task_id else 'unknown',
+            os.getpid()
+        )
+        
+        # Vérification et recyclage du pool si trop ancien
+        _check_pool_age()
+    
+    @task_postrun.connect
+    def after_task_cleanup(**kwargs):
+        """
+        Après chaque tâche, log et nettoyage optionnel.
+        """
+        task = kwargs.get('task')
+        task_id = kwargs.get('task_id')
+        state = kwargs.get('state', 'UNKNOWN')
+        
+        logger.debug(
+            "✅ Fin tâche %s [%s] - État: %s - PID %s", 
+            task.name if task else 'unknown',
+            task_id[:8] if task_id else 'unknown',
+            state,
+            os.getpid()
+        )
+        
+        # Si vous voulez forcer un cleanup de connexions après chaque tâche :
+        # (Optionnel, peut réduire les performances mais augmente la stabilité)
+        # with app.app_context():
+        #     _cleanup_stale_connections()
+    
+    logger.info(
+        "✅ Celery configuré : Broker=%s, Backend=%s",
+        broker_url,
+        result_backend_url
+    )
+    
+    return celery
+
 
 def create_app():
+    """Crée et configure l'application Flask."""
+    
     # Logging
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - PID:%(process)d - %(message)s'
+    )
     logger = logging.getLogger(__name__)
 
     # Flask app
     app = Flask(__name__)
     CORS(app, resources={r"/webhook": {"origins": "*"}})
     app.config.from_object(Config)
+    
+    # Vérification SECRET_KEY
     assert app.config.get("SECRET_KEY"), "SECRET_KEY requis pour les sessions !"
 
+    # ✅ Configuration Celery + Redis
+    redis_url = os.getenv('REDIS_URL', 'redis://172.23.232.56:6379/0')
+    
+    app.config.from_mapping(
+        broker_url=redis_url,
+        result_backend=redis_url,
+        
+        # ✅ Configuration additionnelle pour Redis
+        broker_transport_options={
+            'visibility_timeout': 3600,  # 1 heure
+            'fanout_prefix': True,
+            'fanout_patterns': True,
+        },
+        result_backend_transport_options={
+            'retry_policy': {
+                'timeout': 5.0
+            }
+        },
+    )
     ensure_users_schema()
      # Flask-Login
     login_manager = LoginManager()
@@ -54,17 +216,16 @@ def create_app():
     ensure_all_schemas()
     db = Database()
 
-    # ----- Schemas déjà assurés via ensure_all_schemas() -----
-
 
     # ----- Scheduler (un seul démarrage) -----
     def _send(sale, template_type):
         # envoie email+whatsapp selon la stratégie
         return notifier._send_notification(sale, template_type)
     
-    if not getattr(app, "_scheduler_started", False):
+    if not getattr(app, "_workers_started", False):
         start_scheduler(_send)
-        app._scheduler_started = True
+        start_campaign_worker()
+        app._workers_started = True
 
 
 
@@ -87,26 +248,50 @@ def create_app():
 
     import imaplib
 
-    @app.get("/debug-imap")
-    def debug_imap():
-        try:
-            host = os.getenv("IMAP_HOST")
-            port = int(os.getenv("IMAP_PORT", "993"))
-            user = os.getenv("IMAP_USER") or os.getenv("SMTP_USER")
-            pw   = os.getenv("IMAP_PASS") or os.getenv("SMTP_PASS")
+    # @app.get("/debug-imap")
+    # def debug_imap():
+    #     try:
+    #         host = os.getenv("IMAP_HOST")
+    #         port = int(os.getenv("IMAP_PORT", "993"))
+    #         user = os.getenv("IMAP_USER") or os.getenv("SMTP_USER")
+    #         pw   = os.getenv("IMAP_PASS") or os.getenv("SMTP_PASS")
 
-            with imaplib.IMAP4_SSL(host, port) as imap:
-                imap.login(user, pw)
-                typ, data = imap.list()
-                rows = []
-                if typ == "OK":
-                    for line in data or []:
-                        rows.append(line.decode("utf-8", "ignore"))
-                imap.logout()
-            return jsonify({"ok": True, "folders": rows})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+    #         with imaplib.IMAP4_SSL(host, port) as imap:
+    #             imap.login(user, pw)
+    #             typ, data = imap.list()
+    #             rows = []
+    #             if typ == "OK":
+    #                 for line in data or []:
+    #                     rows.append(line.decode("utf-8", "ignore"))
+    #             imap.logout()
+    #         return jsonify({"ok": True, "folders": rows})
+    #     except Exception as e:
+    #         return jsonify({"ok": False, "error": str(e)}), 500
+        
 
+
+    from webhook_app.utils.tasks import generate_video_script, generate_audio_task
+
+    @app.route('/generate_script/<int:brief_id>') 
+    def generate_vid_script(brief_id):
+       
+        task_chain_object = chain(generate_video_script.s(brief_id), generate_audio_task.s()) # type: ignore
+        
+        # On LANCE la chaîne UNE SEULE FOIS et on récupère le résultat
+        task_result = task_chain_object.apply_async()
+        
+
+        # task_result est un objet AsyncResult qui contient l'ID de la tâche
+        if task_result:
+            
+            logger.info(f"Tâche envoyée avec l'ID : {task_result.id}")
+            
+            task_result_id = task_result.id
+        return jsonify({
+        "message": "Flux de génération vidéo lancé !",
+        "group_task_id": task_result_id, # C'est l'ID du groupe de tâches (la chaîne)
+        "brief_id": brief_id
+    })
     @app.route("/webhook", methods=["GET", "POST", "OPTIONS"])
     def handle_webhook():
         app.logger.info(f"DB_PATH = {Config.DB_PATH}")
@@ -197,8 +382,20 @@ def create_app():
 
 # Point d'entrée
 app = create_app()
+celery = make_celery(app)
+__all__ = ['app', 'celery']
+
+
+# from webhook_app.utils.tasks import generate_script_task
+# @app.route('/trigger-task')
+# def trigger():
+#     generate_script_task.delay()
+#     return jsonify({
+#         "task": "Task triggered!",
+#         "statut_code": 200
+#                      })
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), use_reloader=False)
-
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
 

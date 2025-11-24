@@ -1,4 +1,4 @@
-{% extends "dashboard/base.html" %}
+<!-- {% extends "dashboard/base.html" %}
 {% block title %}Détail des Relances pour {{ contact_key }}{% endblock %}
 {% block body_class %}page-relances-detail{% endblock %}
 
@@ -57,4 +57,29 @@
             </tbody>
         </table>
     </div>
-{% endblock %}
+{% endblock %} -->
+
+
+{# templates/dashboard/_relances_modal_content.html #}
+
+{% for relance in relances %}
+    <tr>
+        <form method="post" action="{{ url_for('dashboard.manage_relances_summary') }}">
+            <input type="hidden" name="job_id" value="{{ relance.id }}">
+            
+            <td>{{ relance.id }}</td>
+            <td>{{ relance.template_type }}</td>
+            <td>
+                <input type="datetime-local" class="form-control" 
+                       name="due_at_{{ relance.id }}" 
+                       value="{{ relance.due_at.strftime('%Y-%m-%dT%H:%M') if relance.due_at else '' }}">
+            </td>
+            <td>
+                <button type="submit" name="action" value="update" class="btn primary small">Enregistrer</button>
+                <button type="submit" name="action" value="delete" class="btn ghost danger small" formnovalidate>Annuler</button>
+            </td>
+        </form>
+    </tr>
+{% else %}
+    <tr><td colspan="4" style="text-align:center;padding:20px;">Aucune relance à afficher.</td></tr>
+{% endfor %}

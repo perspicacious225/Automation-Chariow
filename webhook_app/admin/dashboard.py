@@ -109,6 +109,12 @@ def metrics_json():
         WHERE status='completed'
           AND COALESCE(completed_at,created_at) >= NOW() - INTERVAL '7 days'
     """)
+    data["gmv_30d"] = _scalar("""
+        SELECT COALESCE(SUM(amount_value*0.90),0)
+        FROM fact_sales
+        WHERE status='completed'
+          AND COALESCE(completed_at,created_at) >= NOW() - INTERVAL '30 days'
+    """)
 
     data["orders_7d"] = _scalar("""
         SELECT COUNT(*) FROM fact_sales
@@ -138,13 +144,13 @@ def metrics_json():
     """)
 
     # Recovered 7d (72h window + proof of relance before completion)
-    data["recovered_orders_7d"] = _scalar("""
+    data["recovered_orders_30d"] = _scalar("""
         WITH ab AS (
           SELECT product_id, contact_key,
                  MAX(COALESCE(abandoned_at, failed_at)) AS last_ab
           FROM fact_sales
           WHERE status IN ('abandoned','failed')
-            AND COALESCE(abandoned_at, failed_at) >= NOW() - INTERVAL '7 days'
+            AND COALESCE(abandoned_at, failed_at) >= NOW() - INTERVAL '30 days'
             AND product_id IS NOT NULL AND contact_key IS NOT NULL
           GROUP BY product_id, contact_key
         ),
@@ -154,7 +160,7 @@ def metrics_json():
                  product_id, contact_key
           FROM fact_sales
           WHERE status='completed'
-            AND completed_at >= NOW() - INTERVAL '7 days'
+            AND completed_at >= NOW() - INTERVAL '30 days'
             AND completed_at IS NOT NULL
             AND product_id IS NOT NULL AND contact_key IS NOT NULL
         )
@@ -475,54 +481,86 @@ def edit_template():
         "channel": val("channel","email") or "email",
         "subject": val("subject",""),
         "body": val("body",""),
-        "is_full_html": bool(val("is_full_html",0)),
-        "is_active": bool(val("is_active",1)),
+        "is_full_html": bool(val("is_full_html","0")),
+        "is_active": bool(val("is_active","1")),
         "pid_prefill": pid_prefill
     }
     return render_template("dashboard/edit_template.html", **ctx)
 
 
-
 from webhook_app.database_pg import (
     get_pending_relances_by_contact, 
-    get_pending_relances,
-    cancel_relance_by_id,
+    cancel_relances_for_contacts,
+    get_pending_relances, 
+    cancel_relance_by_id, 
     update_relance_due_at
 )
 
-@dashboard_bp.route("/relances")
+@dashboard_bp.route("/relances", methods=["GET", "POST"])
 @admin_required
 def manage_relances_summary():
-    contacts_with_relances = get_pending_relances_by_contact()
-    return render_template("dashboard/relances_summary.html", contacts=contacts_with_relances)
-
-
-@dashboard_bp.route("/relances/<contact_key>", methods=["GET", "POST"])
-@admin_required
-def manage_relances_for_contact(contact_key):
     if request.method == "POST":
         action = request.form.get("action")
-        job_id = request.form.get("job_id")
-
-        if action == "delete" and job_id:
-            cancel_relance_by_id(int(job_id))
         
-        elif action == "update" and job_id:
+        if action == "bulk_delete":
+            contacts_to_cancel = request.form.getlist("selected_contacts")
+            if contacts_to_cancel:
+                cancelled_count = cancel_relances_for_contacts(contacts_to_cancel)
+                flash(f"{cancelled_count or 0} relance(s) annulée(s) pour {len(contacts_to_cancel)} client(s).", "success")
+        
+        elif action == "delete":
+            job_id = request.form.get("job_id")
+            if job_id:
+                cancel_relance_by_id(int(job_id))
+                flash(f"La relance #{job_id} a été annulée.", "success")
+        
+        elif action == "update":
+            job_id = request.form.get("job_id")
             new_due_at_str = request.form.get(f"due_at_{job_id}")
-            if new_due_at_str:
+            if job_id and new_due_at_str:
                 try:
                     update_relance_due_at(int(job_id), new_due_at_str)
+                    flash(f"La date de la relance #{job_id} a été mise à jour.", "success")
                 except ValueError:
-                
                     flash("Format de date invalide.", "error")
+        
+        return redirect(url_for("dashboard.manage_relances_summary", 
+                                search=request.args.get('search', ''), 
+                                page=request.args.get('page', 1)))
 
-        return redirect(url_for("dashboard.manage_relances_for_contact", contact_key=contact_key))
+    # Logique GET pour afficher la liste
+    page = request.args.get('page', 1, type=int)
+    search_term = request.args.get('search', '', type=str)
+    per_page = 20
 
-    pending_relances = get_pending_relances(contact_key=contact_key)
-    return render_template("dashboard/relances_detail.html", 
-                           relances=pending_relances, 
-                           contact_key=contact_key)
+    contacts, total_count = get_pending_relances_by_contact(
+        search_term=search_term,
+        page=page,
+        per_page=per_page
+    )
 
+    total_pages = math.ceil(total_count / per_page)
+    
+    return render_template(
+        "dashboard/relances_summary.html", 
+        contacts=contacts,
+        page=page,
+        total_pages=total_pages,
+        search_term=search_term
+    )
+
+# ROUTE API POUR LE MODAL (celle qui cause l'erreur)
+@dashboard_bp.route("/api/relances/<contact_key>")
+@admin_required
+def api_relances_for_contact(contact_key):
+    relances = get_pending_relances(contact_key=contact_key)
+    relances_list = []
+    for relance in relances:
+        relance_dict = dict(relance)
+        if relance_dict.get('due_at'):
+            relance_dict['due_at_iso'] = relance_dict['due_at'].strftime('%Y-%m-%dT%H:%M')
+        relances_list.append(relance_dict)
+    return jsonify(relances_list)
 
 
 @dashboard_bp.route("/templates/delete", methods=["POST"])
@@ -530,19 +568,30 @@ def manage_relances_for_contact(contact_key):
 def delete_template_post():
     rid = request.form.get("id")
     if not rid:
-        return "id requis", 400
+        response = jsonify({"error": "id requis"})
+        response.status_code = 400
+        return response
 
-    from webhook_app.database_pg import get_connection, execute_with_retry
+    product_id_to_redirect = None 
+
     with get_connection() as conn:
         row = execute_with_retry(conn, "SELECT product_id FROM message_templates WHERE id=%s", (rid,), fetch="one")
+        if row:
+            product_id_to_redirect = row.get("product_id")
+        # Now perform the deletion
         execute_with_retry(conn, "DELETE FROM message_templates WHERE id=%s", (rid,))
 
-    if row and row["product_id"]:
-        return redirect(url_for("dashboard.templates_for_product", id=row["product_id"]))
-
-
+    # Decide where to redirect
+    if product_id_to_redirect:
+        # If there was a product ID, redirect to that product's template list
+        return redirect(url_for("dashboard.templates_for_product", id=product_id_to_redirect))
+    else:
+        # If no product ID (or template didn't exist), redirect to the main list
+        # Assuming 'templates_products' is your main template listing route
+        return redirect(url_for("dashboard.templates_products"))
 
 @dashboard_bp.route("/templates/delete_product", methods=["POST"])
+
 @admin_required
 def delete_product_post():
 
@@ -585,21 +634,210 @@ def manage_mappings():
     current_mappings = read_mappings_from_db()
     return render_template("dashboard/mappings.html", mappings=current_mappings)
 
+from datetime import datetime, timezone
+
+from webhook_app.database_pg import (
+    create_direct_campaign, 
+    get_all_template_types,
+    get_confirmed_customer_emails, 
+    get_unconverted_customer_emails,
+    get_campaign_by_id
+)
+
+# Campaign manager routes
+
+# @dashboard_bp.route("/direct-send", methods=["GET", "POST"])
+# @admin_required
+# def direct_send():
+#     if request.method == "POST":
+#         subject = request.form.get("subject")
+#         html_body = request.form.get("html_body")
+#         recipients_str = request.form.get("recipients", "")
+#         segment = request.form.get("segment")
+#         scheduled_at_str = request.form.get("scheduled_at")
+
+#         # NOUVEAU : Récupération des filtres
+#         product_id_filter = request.form.get("product_id_filter") or None
+#         start_date = request.form.get("start_date") or None
+#         end_date = request.form.get("end_date") or None
+
+#         recipients = []
+#         if segment:
+#             # On passe les filtres aux fonctions de la base de données
+#             if segment == "confirmed":
+#                 recipients = get_confirmed_customer_emails(
+#                     product_id=product_id_filter, 
+#                     start_date=start_date, 
+#                     end_date=end_date
+#                 )
+#             elif segment == "unconverted":
+#                 recipients = get_unconverted_customer_emails(
+#                     product_id=product_id_filter, 
+#                     start_date=start_date, 
+#                     end_date=end_date
+#                 )
+#         elif recipients_str:
+#             recipients = [email.strip() for email in recipients_str.replace(',', '\n').split('\n') if email.strip()]
+
+#         if not all([subject, html_body, recipients]):
+#             flash("Sujet, Message et au moins un Destinataire (manuel ou via segment) sont requis.", "error")
+#         else:
+#             scheduled_at = scheduled_at_str or datetime.now(timezone.utc).isoformat()
+#             campaign_id = create_direct_campaign(subject, html_body, recipients, scheduled_at)
+#             flash(f"Campagne #{campaign_id} programmée avec succès pour {len(recipients)} destinataire(s).", "success")
+#             return redirect(url_for("dashboard.direct_send"))
+
+#     template_types = get_all_template_types()
+#     return render_template("dashboard/direct_send.html", template_types=template_types)
+
+
+#--------------------------------------
+
+@dashboard_bp.route("/direct-send", methods=["GET", "POST"])    
+@admin_required
+def direct_send():
+    prefill_data = {} # Dictionary to hold data for pre-filling the form
+
+    # --- GET Request Logic ---
+    if request.method == "GET":
+        clone_id = request.args.get('clone_id', type=int)
+        if clone_id:
+            
+            original_campaign = get_campaign_by_id(clone_id)
+            if original_campaign:
+                prefill_data['subject'] = f"{original_campaign['subject']}"
+                prefill_data['html_body'] = original_campaign['html_body']
+                flash(f"Clonage de la campagne #{clone_id}. Vérifiez et modifiez avant de programmer.", "info")
+
+    # --- POST Request Logic ---
+    elif request.method == "POST":
+        subject = request.form.get("subject")
+        html_body = request.form.get("html_body")
+        recipients_str = request.form.get("recipients", "")
+        segment = request.form.get("segment") or None
+        scheduled_at_str = request.form.get("scheduled_at")
+        product_id_filter = request.form.get("product_id_filter") or None
+        start_date = request.form.get("start_date") or None
+        end_date = request.form.get("end_date") or None
+
+        recipients = []
+        # ... (logic for getting recipients based on segment or manual input - unchanged) ...   
+        if segment:
+            if segment == "confirmed": recipients = get_confirmed_customer_emails(
+                product_id=product_id_filter,
+                    start_date=start_date,
+                    end_date=end_date
+            )
+            elif segment == "unconverted": recipients = get_unconverted_customer_emails(
+                product_id=product_id_filter,
+                    start_date=start_date,
+                    end_date=end_date
+            )
+        elif recipients_str: 
+            recipients = [email.strip() for email in recipients_str.replace(',', '\n').split('\n') if email.strip()]
+
+
+        if not all([subject, html_body, recipients]):
+            flash("Sujet, Message et au moins un Destinataire (manuel ou via segment) sont requis.", "error")
+        else:
+            scheduled_at = scheduled_at_str or datetime.now(timezone.utc).isoformat()
+            campaign_id = create_direct_campaign(subject, html_body, recipients, scheduled_at, 
+                segment_name=segment,
+                filter_product_id=product_id_filter,
+                filter_start_date=start_date,
+                filter_end_date=end_date)
+            
+            flash(f"Campagne #{campaign_id} programmée avec succès pour {len(recipients)} destinataire(s).", "success")
+            # Redirect to the history page after successful creation might be better UX
+            return redirect(url_for("dashboard.campaign_history"))
+
+    # --- Render Template (for both GET and POST if POST fails) ---
+    template_types = get_all_template_types()
+    # Pass the prefill_data to the template
+    return render_template("dashboard/direct_send.html",
+                           template_types=template_types,
+                           prefill=prefill_data)
+
+
+
+
+
+
+
+from webhook_app.database_pg import get_all_campaigns
+
+import math
+
+
+@dashboard_bp.route("/campaigns")
+@admin_required
+def campaign_history():
+    # Récupérer les paramètres depuis l'URL (ex: /campaigns?page=2&search=promo)
+    page = request.args.get('page', 1, type=int)
+    search_term = request.args.get('search', '', type=str)
+    per_page = 5
+    # Appeler la fonction de base de données mise à jour
+    campaigns, total_count = get_all_campaigns(
+        search_term=search_term, 
+        page=page, 
+        per_page=per_page
+    )
+
+    # Calculer le nombre total de pages
+    total_pages = math.ceil(total_count / per_page)
+
+    return render_template(
+        "dashboard/campaign_history.html", 
+        campaigns=campaigns,
+        page=page,
+        total_pages=total_pages,
+        search_term=search_term
+    )
+
+from webhook_app.database_pg import get_all_campaigns, get_campaign_by_id
+
+
+@dashboard_bp.route("/api/campaigns/<int:campaign_id>")
+@admin_required
+def api_campaign_detail(campaign_id):
+    campaign = get_campaign_by_id(campaign_id)
+    if not campaign:
+        return jsonify({"error": "Not Found"}), 404
+    
+    # Convertir l'objet de la base de données en un dictionnaire JSON compatible
+    campaign_dict = dict(campaign)
+    for key, value in campaign_dict.items():
+        
+        # Convertit les dates en chaînes de texte
+        if hasattr(value, 'isoformat'): 
+            campaign_dict[key] = value.isoformat()
+
+    return jsonify(campaign_dict)
+
+from webhook_app.database_pg import delete_campaign_by_id
+@dashboard_bp.route("/campaigns/<int:campaign_id>/delete", methods=["POST"])
+@admin_required
+def delete_campaign(campaign_id):
+
+    deleted_count = delete_campaign_by_id(campaign_id)
+    if deleted_count > 0: # type: ignore
+        flash(f"Campagne #{campaign_id} supprimée avec succès.", "success")
+    else:
+        flash(f"Impossible de supprimer la campagne #{campaign_id} (peut-être déjà supprimée).", "warning")
+    # Rediriger vers la page d'historique après la suppression
+    return redirect(url_for("dashboard.campaign_history"))
+
+
 
 @dashboard_bp.route("/templates/preview", methods=["GET", "POST"])
 @admin_required
-def preview_template():
-
-    try:
-        from webhook_app.services.mailer import render_email_with_brand as _brand_wrap
-        
-    except Exception:
-        def _brand_wrap(fragment_html, tvars):
-            return f"""<!doctype html><meta charset="utf-8">
-            <title>Preview</title>
-            <div style="font-family:Segoe UI,Arial,sans-serif;max-width:680px;margin:24px auto;padding:16px;border:1px solid #eee;border-radius:8px">
-              {fragment_html}
-            </div>"""
+def preview_template(): 
+    def _brand_wrap(fragment_html, tvars):
+        return f"""<!doctype html><meta charset="utf-8">
+        <title>Preview</title>
+        <div style="font-family:Segoe UI,Arial,sans-serif;max-width:680px;margin:24px auto;padding:16px;border:1px solid #eee;border-radius:8px">
+            {fragment_html}
+        </div>"""
 
     tvars = {
         "customer_first_name": "Jean",

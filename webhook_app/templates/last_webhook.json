@@ -1,7 +1,7 @@
 {
   "event": "abandoned.sale",
   "sale": {
-    "id": "S_LOCAL_002",
+    "id": "S_LOCAL_017",
     "status": "abandoned",
     "amount": {
       "value": 4900,
@@ -12,7 +12,7 @@
     "abandoned_at": "2025-09-30T10:05:00Z"
   },
   "product": {
-    "id": "prd_k3eyyy",
+    "id": "prd_k3eyy",
     "name": "Microsoft 365 à vie test",
     "price": {
       "value": 15000,
@@ -21,7 +21,7 @@
   },
   "customer": {
     "first_name": "Jean",
-    "email": "knickoknicko@gmail.com",
+    "email": "perspicaciousnicko@gmail.com",
     "phone": "+2250789333113",
     "country": "CI"
   },

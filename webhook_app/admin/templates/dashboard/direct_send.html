@@ -1,0 +1,156 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Communication Directe{% endblock %}
+{% block body_class %}page-direct-send{% endblock %}
+
+{% block head_extra %}
+    <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
+    <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
+    
+    <style>
+        .ql-editor { min-height: 350px; font-size: 16px; }
+        .ql-toolbar.ql-snow, .ql-container.ql-snow { border-radius: 5px; }
+        #segment-filters {
+            display: none; padding: 0.5em; margin-top: 0.5em;
+            background-color: #151515; border-radius: 5px; border: 1px solid #dee2e6;
+        }
+        #segment-filters .fields { display: flex; gap: 1em; }
+        .mail_box_size { height: 25px; } 
+        .go_back_to_home:hover{
+            cursor: pointer;
+            background-color: skyblue;
+
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+    <div style="display: flex; flex-direction: row; justify-content: space-between; justify-items: center; max-width: 50%; margin: auto;"  >
+        <h1 class="page-title" style="text-align: center;font-weight: bold;">Communication Directe</h1>
+        <a class="btn btn primary go_back_to_home" style="margin: 10px;" href="{{ url_for('dashboard.templates_products') }}">Back</a>
+    </div>
+
+    <div class="content-wrapper" style="max-width: 960px; margin: 2em auto;">
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-message {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card form-card">
+            <h2>{{ "Cloner une campagne" if prefill else "Créer une nouvelle campagne" }}</h2>
+            
+            <form method="post" id="campaign-form">
+            
+                <div class="field">
+                    <label for="recipients">Destinataires (Ciblage Manuel)</label>
+                    <textarea id="recipients" name="recipients" rows="2" placeholder="Entrez les adresses email, une par ligne ou séparées par des virgules."></textarea>         
+                </div>
+
+                <p style="text-align: center; font-weight: bold; margin: 0.5em 0;">OU</p>
+
+                <div class="field">
+                    <label for="segment">Choisir un segment de Clients</label>
+                    <select id="segment" name="segment">
+                        <option value="">-- Choisissez un segment --</option>
+                        <option value="confirmed">Clients ayant confirmé une commande</option>
+                        <option value="unconverted">Paniers abandonnés non convertis</option>
+                    </select>
+                </div>
+
+                <div id="segment-filters">
+                    <h4>Affiner le segment (optionnel)</h4>
+                    <div class="fields">
+                        <div class="field">
+                            <label for="product_id_filter">Filtrer par ID Produit</label>
+                            <input type="text" id="product_id_filter" name="product_id_filter" placeholder="ex: prd_k3eyyy">
+                        </div>
+                        <div class="field">
+                            <label for="start_date">Date de début</label>
+                            <input type="date" id="start_date" name="start_date">
+                        </div>
+                        <div class="field">
+                            <label for="end_date">Date de fin</label>
+                            <input type="date" id="end_date" name="end_date">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="field" >
+                    <label for="subject">Objet de mail</label>
+                    {# MODIFICATION 1: Utilisation de prefill.subject #}
+                    <input type="text" id="subject" name="subject" required value="{{ prefill.subject or '' }}">
+                </div>
+                
+                <div class="field" style="background-color:white; box-shadow:5px; border-radius:10px; border:15px; margin:5px; padding:5px;">
+                    <label>Description*</label>
+                    <div id="toolbar-container" style="margin: 5px;">
+                        <span class="ql-formats"><select class="ql-header"><option value="1">Titre 1</option><option value="2">Titre 2</option><option value="3">Titre 3</option><option selected>Normal</option></select></span>
+                        <span class="ql-formats"><button class="ql-bold"></button><button class="ql-italic"></button><button class="ql-underline"></button></span>
+                        <span class="ql-formats"><select class="ql-color"></select><select class="ql-background"></select></span>
+                        <span class="ql-formats"><button class="ql-list" value="ordered"></button><button class="ql-list" value="bullet"></button><select class="ql-align"></select></span>
+                        <span class="ql-formats"><button class="ql-link"></button><button class="ql-image"></button><button class="ql-blockquote"></button></span>
+                        <span class="ql-formats"><button class="ql-clean"></button></span>
+                    </div>
+                    <div id="editor-container">
+                        {# MODIFICATION 2: Utilisation de prefill.html_body #}
+                        {{ prefill.html_body|safe if prefill else '' }}
+                    </div>
+                    <input type="hidden" name="html_body" id="html_body">
+                </div>
+
+                <div class="field">
+                    <label for="scheduled_at">Définir une date d'envoi</label>
+                    <input type="datetime-local" id="scheduled_at" name="scheduled_at">
+                </div>
+
+                <div class="actions-bar">
+                    <div class="buttons">
+                        <button class="btn primary" type="submit">Programmer la Campagne</button>
+                    </div>
+                </div>
+                
+            </form> 
+        </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
+<script>
+    // 1. On passe le corps pré-rempli de Jinja à JavaScript de manière sécurisée
+    const prefilledBody = {{ prefill.html_body|tojson|safe if prefill else 'null' }};
+
+    // 2. Initialisation de Quill (inchangée)
+    const quill = new Quill('#editor-container', {
+      modules: { toolbar: '#toolbar-container' },
+      theme: 'snow',
+      placeholder: 'Rédigez votre message ici...'
+    });
+
+    // 3. Définir le contenu initial si disponible (méthode plus robuste)
+    if (prefilledBody) {
+        // On utilise l'API de Quill pour insérer le HTML
+        quill.clipboard.dangerouslyPasteHTML(prefilledBody);
+    }
+
+    // 4. Copier le contenu final avant l'envoi (inchangé)
+    const form = document.getElementById('campaign-form');
+    form.addEventListener('submit', function(event) {
+      document.getElementById('html_body').value = quill.root.innerHTML;
+    });
+
+    // 5. Logique pour afficher/cacher les filtres (inchangée)
+    const segmentSelect = document.getElementById('segment');
+    const filtersContainer = document.getElementById('segment-filters');
+    segmentSelect.addEventListener('change', function() {
+      if (this.value === 'confirmed' || this.value === 'unconverted') {
+        filtersContainer.style.display = 'block';
+      } else {
+        filtersContainer.style.display = 'none';
+      }
+    });
+    segmentSelect.dispatchEvent(new Event('change'));
+</script>
+{% endblock %}

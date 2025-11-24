@@ -1,0 +1,241 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Historique des Campagnes{% endblock %}
+{% block body_class %}page-campaigns{% endblock %}
+
+{% block head_extra %}
+    <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
+    <style>
+        /* Styles pour les badges de statut */
+        .status-badge { padding: 0.2em 0.6em; border-radius: 10px; font-size: 0.8em; font-weight: bold; color: white; }
+        .status-completed { background-color: #28a745; } .status-pending { background-color: #007bff; }
+        .status-running { background-color: #ffc107; color: black; } .status-failed { background-color: #dc3545; }
+        
+        /* Styles pour le Modal */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            display: none; /* Caché par défaut */
+            justify-content: center; align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background: white; color: #333; padding: 2em; border-radius: 8px;
+            width: 90%; max-width: 800px;
+            max-height: 90vh; overflow-y: auto;
+            position: relative;
+        }
+        .modal-close {
+            position: absolute; top: 10px; right: 15px;
+            font-size: 1.8em; font-weight: bold;
+            cursor: pointer; border: none; 
+            
+            
+        }
+        .modal-close:hover{
+            background-color: red; color: white;
+        }
+        .modal-content h2 { margin-top: 0; }
+        .email-preview { border: 1px solid #ccc; padding: 1.5em; border-radius: 5px; margin-top: 1em; background: #fdfdfd; }
+        .recipient-list { background: #f8f9fa; border: 1px solid #dee2e6; padding: 1em; border-radius: 5px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; }
+
+        /* Styles pour la recherche et la pagination */
+        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1em; }
+        .search-form { flex-grow: 1; max-width: 400px; }
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 0.5em; margin-top: 2em; }
+        .pagination a, .pagination span { padding: 0.5em 1em; border: 1px solid #ccc; text-decoration: none; border-radius: 5px; }
+        .pagination a:hover { background-color: #f0f0f0; }
+        .pagination .current { background-color: #007bff; color: white; border-color: #007bff; }
+        .pagination .disabled { color: #ccc; border-color: #eee; }
+        .mouse_hover:hover{
+            cursor: pointer;
+            background-color: green;
+        }
+        .go_back_to_direct_send:hover{
+            cursor: pointer;
+            background-color: skyblue;
+
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+    <div style="display: flex; flex-direction: row; justify-content: space-between;">
+        <h1 class="page-title">Historique des Campagnes Manuelles</h1>
+        <a class="btn btn primary go_back_to_direct_send" style="margin: 10px;" href="{{ url_for('dashboard.direct_send') }}">Back</a>
+    </div>
+    
+
+    <div class="card">
+        <div class="toolbar">
+            <form method="get" action="{{ url_for('dashboard.campaign_history') }}" class="search-form">
+                <input type="search" name="search" placeholder="Rechercher par sujet..." value="{{ search_term or '' }}">
+                <button type="submit" class="btn small">Rechercher</button>
+            </form>
+        </div>
+
+        <table class="results-table" 
+               data-api-url-template="{{ url_for('dashboard.api_campaign_detail', campaign_id=0) }}">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Sujet</th>
+                    <th>Statut</th>
+                    <th>Destinataires</th>
+                    <th>Programmation</th>
+                    <th>Date d'echeance</th>
+                    <!-- <th>Taux de Conv.</th> -->
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                 {% for campaign in campaigns %}
+                <tr>
+                    <td>{{ campaign.id }}</td>
+                    <td>{{ campaign.subject }}</td>
+                    <td><span class="status-badge status-{{ campaign.status }}">{{ campaign.status }}</span></td>
+                    <td>{{ campaign.recipient_count }}</td>
+                    <td>{{ campaign.scheduled_at.strftime('%Y-%m-%d %H:%M') if campaign.scheduled_at else 'N/A' }}</td>
+                    <td>{{ campaign.finished_at.strftime('%Y-%m-%d %H:%M') if campaign.finished_at else '-' }}</td>
+                    <td style="text-align: center; display: none;"><strong>{{ campaign.conversion_rate if campaign.conversion_rate else "N/A"}}</strong></td> 
+                    <td>
+                        <button class="btn primary small js-view-details mouse_hover" data-campaign-id="{{ campaign.id }}">
+                            Voir
+                        </button>
+                        <a href="{{ url_for('dashboard.direct_send', clone_id=campaign.id) }}" class="btn ghost small" title="Cloner cette campagne">
+                    Cloner
+                </a>
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="8">...</td></tr> {# Mettre à jour le colspan à 8 #}
+            {% endfor %}
+            </tbody>
+        </table>
+
+        {% if total_pages > 1 %}
+        <div class="pagination">
+            {% if page > 1 %}<a href="{{ url_for('dashboard.campaign_history', page=page-1, search=search_term) }}">« Précédent</a>{% else %}<span class="disabled">« Précédent</span>{% endif %}
+            {% for p in range(1, total_pages + 1) %}{% if p == page %}<span class="current">{{ p }}</span>{% else %}<a href="{{ url_for('dashboard.campaign_history', page=p, search=search_term) }}">{{ p }}</a>{% endif %}{% endfor %}
+            {% if page < total_pages %}<a href="{{ url_for('dashboard.campaign_history', page=page+1, search=search_term) }}">Suivant »</a>{% else %}<span class="disabled">Suivant »</span>{% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <div id="detail-modal" class="modal-overlay">
+        <div class="modal-content">
+            <!-- <button class="btn btn danger" style="border:1px white; border-radius: 5px;">Delete</button> -->
+            <form id="delete-campaign-form" method="post" style="border:1px white; border-radius: 5px;">
+             <button type="submit" class="btn danger small" 
+                     onclick="return confirm('Êtes-vous sûr de vouloir supprimer définitivement cette campagne ?');">
+                 Delete
+             </button>
+        </form>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <h2 id="modal-subject"></h2>
+            <p><strong>Statut:</strong> <span id="modal-status"></span></p>
+            <p><strong>Destinataires:</strong> <span id="modal-recipient-count"></span></p>
+            <hr>
+            <h3>Message envoyé</h3>
+            <div id="modal-body" class="email-preview"></div>
+            <h3>Liste des destinataires</h3>
+            <div id="modal-recipients" class="recipient-list"></div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // ... (Scripts for select-all and search remain unchanged) ...
+
+    // --- Updated Modal Logic ---
+    const modal = document.getElementById('detail-modal');
+    const modalTitle = document.getElementById('modal-subject');
+    const modalStatus = document.getElementById('modal-status');
+    const modalRecipientCount = document.getElementById('modal-recipient-count');
+    const modalBody = document.getElementById('modal-body');
+    const modalRecipients = document.getElementById('modal-recipients');
+    const deleteForm = document.getElementById('delete-campaign-form'); // Get delete form
+
+    function openModal() { modal.style.display = 'flex'; }
+    function closeModal() { modal.style.display = 'none'; }
+
+    modal.querySelector('.modal-close').addEventListener('click', closeModal);
+    modal.addEventListener('click', function(event) { if (event.target === modal) { closeModal(); } });
+
+    document.querySelectorAll('.js-view-details').forEach(button => {
+        button.addEventListener('click', function() {
+            const campaignId = this.dataset.campaignId;
+            const urlTemplate = document.querySelector('.results-table').dataset.apiUrlTemplate;
+            const apiUrl = urlTemplate.replace('/0', `/${campaignId}`);
+
+            // Clear previous content and show loading
+            modalTitle.textContent = 'Chargement...';
+            modalStatus.innerHTML = '';
+            modalRecipientCount.textContent = '';
+            modalBody.innerHTML = '';
+            modalRecipients.textContent = '';
+            // Clear previous filter info if it exists
+            const existingFilterInfo = modal.querySelector('.filter-info');
+            if (existingFilterInfo) { existingFilterInfo.remove(); }
+            // Clear previous conversion rate info if it exists
+            const existingConvRateInfo = modal.querySelector('.conversion-rate-info');
+            if (existingConvRateInfo) { existingConvRateInfo.remove(); }
+
+
+            openModal();
+
+            fetch(apiUrl)
+                .then(response => {
+                    if (!response.ok) { throw new Error(`Erreur HTTP: ${response.status}`); }
+                    return response.json();
+                })
+                .then(data => {
+                    modalTitle.textContent = `Campagne #${data.id} : ${data.subject}`;
+                    modalStatus.innerHTML = `<span class="status-badge status-${data.status}">${data.status}</span>`;
+                    modalRecipientCount.textContent = data.recipients.length;
+                    modalBody.innerHTML = data.html_body;
+                    modalRecipients.textContent = data.recipients.join('\n');
+
+                    // Dynamically update delete form action
+                    const deleteUrl = "{{ url_for('dashboard.delete_campaign', campaign_id=0) }}".replace('/0/delete', `/${data.id}/delete`);
+                    deleteForm.action = deleteUrl;
+
+                    // --- NEW: Display Segment/Filter Info ---
+                    let filterHtml = '<div class="filter-info" style="margin-top: 1em; padding-top: 1em; border-top: 1px solid #eee;"><h4>Ciblage</h4><p>';
+                    if (data.segment_name) {
+                        let segmentText = data.segment_name === 'confirmed' ? 'Clients confirmés' : 'Paniers non convertis';
+                        filterHtml += `<strong>Segment:</strong> ${segmentText}<br>`;
+                        if (data.filter_product_id) {
+                            filterHtml += `&nbsp;&nbsp;<em>Produit:</em> ${data.filter_product_id}<br>`;
+                        }
+                        if (data.filter_start_date || data.filter_end_date) {
+                            filterHtml += `&nbsp;&nbsp;<em>Période:</em> ${data.filter_start_date || 'Début'} - ${data.filter_end_date || 'Fin'}<br>`;
+                        }
+                    } else {
+                        filterHtml += 'Ciblage manuel';
+                    }
+                    filterHtml += '</p></div>';
+                    // Insert filter info after recipient count
+                    modalRecipientCount.closest('p').insertAdjacentHTML('afterend', filterHtml);
+
+                    // --- NEW: Display Conversion Rate ---
+                    // We need the conversion rate passed from the main page view
+                    // Let's find the corresponding row in the main table to get it
+                    const tableRow = button.closest('tr');
+                    const conversionRateCell = tableRow.querySelector('td:nth-last-child(2)'); // Second to last cell
+                    if (conversionRateCell && conversionRateCell.textContent.trim() !== '-') {
+                         let convRateHtml = `<div class="conversion-rate-info" style="margin-top: 0.5em;"><p><strong>Taux de Conversion (48h):</strong> ${conversionRateCell.textContent.trim()}</p></div>`;
+                         // Insert conversion rate after filter info
+                         modal.querySelector('.filter-info').insertAdjacentHTML('afterend', convRateHtml);
+                    }
+
+
+                })
+                .catch(error => {
+                    modalTitle.textContent = 'Erreur de chargement des données.';
+                    console.error('Fetch error:', error);
+                });
+        });
+    });
+</script>
+{% endblock %}

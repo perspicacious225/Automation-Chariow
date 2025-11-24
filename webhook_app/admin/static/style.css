@@ -158,7 +158,7 @@ textarea {
 }
 
 textarea {
-  min-height: 260px;
+  /* min-height: 260px; */
   resize: vertical;
   line-height: 1.45;
 }
