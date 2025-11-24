@@ -7,9 +7,14 @@
 {% endblock %}
 
 {% block content %}
-    <h1 class="page-title">Gestion des Mappings Produit - Drive</h1>
+    
+    <div style="display: flex; text-align: center; justify-content: space-around;margin:auto">
+        <h1 class="page-title">Gestion des Mappings Produit - Drive</h1>
+        <a class="btn btn primary" href="{{ url_for('dashboard.templates_products')}}">back</a>
+    </div>
 
     <div class="content-wrapper" style="max-width: 900px; margin: 2em auto;">
+        
 
         <div class="card form-card">
             <h2>Ajouter un nouveau mapping</h2>
