@@ -824,7 +824,7 @@ def delete_campaign(campaign_id):
         flash(f"Campagne #{campaign_id} supprimée avec succès.", "success")
     else:
         flash(f"Impossible de supprimer la campagne #{campaign_id} (peut-être déjà supprimée).", "warning")
-    # Rediriger vers la page d'historique après la suppression
+ 
     return redirect(url_for("dashboard.campaign_history"))
 
 

@@ -22,7 +22,12 @@
 {% endblock %}
 
 {% block content %}
-    <h1 class="page-title">Clients avec Relances Programmées</h1>
+    <div style="display: flex; justify-content: space-between; margin: 10px;">
+        <h1 class="page-title">Clients avec Relances Programmées</h1>
+        <a class="btn btn primary" href="{{ url_for('dashboard.templates_for_product') }}">Back</a>
+    </div>
+    
+
 
     {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}<div class="flash-message {{ category }}">{{ message }}</div>{% endfor %}{% endif %}{% endwith %}
 
