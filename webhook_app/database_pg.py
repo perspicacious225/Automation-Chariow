@@ -943,7 +943,7 @@ def fetch_pending_emails() -> dict:
     Retourne tous les jobs email_pending groupés par contact_key.
     Format : { contact_key: [job, ...] }
     """
-    conn = _get_conn()
+    conn = _POOL.getconn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
@@ -961,12 +961,12 @@ def fetch_pending_emails() -> dict:
             result.setdefault(ck, []).append(dict(row))
         return result
     finally:
-        _release_conn(conn)
+        _POOL.putconn(conn)
 
 
 def mark_pending_email_sent(job_id: int, payload: dict):
     """Marque un email_pending comme envoyé + loggue dans notification_log."""
-    conn = _get_conn()
+    conn = _POOL.getconn()
     try:
         with conn.cursor() as cur:
             # Marque le job
@@ -991,13 +991,13 @@ def mark_pending_email_sent(job_id: int, payload: dict):
                 payload.get("ab_arm", ""),
             ))
     finally:
-        _release_conn(conn)
+        _POOL.putconn(conn)
 
 
 def cancel_pending_emails_for(contact_key: str, product_id: str,
                                exclude_id: int | None = None):
     """Annule les jobs email_pending d'un contact (sauf exclude_id)."""
-    conn = _get_conn()
+    conn = _POOL.getconn()
     try:
         with conn.cursor() as cur:
             if exclude_id:
@@ -1018,6 +1018,6 @@ def cancel_pending_emails_for(contact_key: str, product_id: str,
                       AND sent_at IS NULL
                 """, (contact_key, product_id))
     finally:
-        _release_conn(conn)
+        _POOL.putconn(conn)
 
 
