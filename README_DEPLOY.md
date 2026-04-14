@@ -18,3 +18,13 @@
    - WEBHOOK_SECRET=...
    - SENDER_EMAIL=...
 7. Déployer et tester votre application.
+
+
+Dans webhook_app/database_pg.py, webhook_app/app.py et webhook_app/admin/dashboard.py, identifie tout ce qui est lié à la génération vidéo, publicités, AWS ou S3 :
+
+Les CREATE TABLE ou colonnes dans les schémas
+Les fonctions qui lisent/écrivent ces tables
+Les routes ou vues dashboard qui les utilisent
+Les imports associés
+
+Liste tout avec les numéros de lignes exacts. Ne modifie rien.

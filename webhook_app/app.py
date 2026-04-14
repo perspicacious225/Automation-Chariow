@@ -53,8 +53,51 @@ def create_app():
         return notifier._send_notification(sale, template_type)
 
     if not getattr(app, "_scheduler_started", False):
-        start_scheduler(_send, email_service=notifier.email_service)
+        scheduler_thread = start_scheduler(_send, email_service=notifier.email_service)
         app._scheduler_started = True
+
+        # ── Watchdog : surveille le scheduler toutes les 60s ──────────────
+        import threading as _threading
+        from webhook_app.services.whatsapp import WhatsAppService as _WA
+
+        _wa_admin = _WA()
+        _admin_phone = os.getenv("ADMIN_PHONE_NUMBER")
+
+        def _watchdog():
+            nonlocal scheduler_thread
+            while True:
+                _threading.Event().wait(60)  # attend 60s
+                if not scheduler_thread.is_alive():
+                    logger.critical("[WATCHDOG] Thread scheduler mort — redémarrage.")
+                    try:
+                        if _admin_phone:
+                            _wa_admin.send_message(
+                                phone=_admin_phone,
+                                message=(
+                                    "🚨 CHARIOW — Scheduler de relances arrêté.\n"
+                                    "Redémarrage automatique en cours.\n"
+                                    "Vérifier les logs si cela se répète."
+                                )
+                            )
+                    except Exception:
+                        logger.exception("[WATCHDOG] Alerte WhatsApp admin échouée.")
+                    try:
+                        scheduler_thread = start_scheduler(
+                            _send, email_service=notifier.email_service
+                        )
+                        logger.info("[WATCHDOG] Scheduler redémarré avec succès.")
+                        if _admin_phone:
+                            _wa_admin.send_message(
+                                phone=_admin_phone,
+                                message="✅ CHARIOW — Scheduler redémarré avec succès."
+                            )
+                    except Exception:
+                        logger.exception("[WATCHDOG] Échec redémarrage scheduler.")
+
+        _wt = _threading.Thread(target=_watchdog, name="scheduler-watchdog", daemon=True)
+        _wt.start()
+        logger.info("[WATCHDOG] Démarré — surveille le scheduler toutes les 60s.")
+        # ──────────────────────────────────────────────────────────────────
 
     # ── Routes ────────────────────────────────────────────────────────────────
 

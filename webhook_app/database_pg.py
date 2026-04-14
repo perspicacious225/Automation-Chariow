@@ -114,6 +114,12 @@ def delete_mapping_from_db(product_id: str, folder_id: str):
     with get_connection() as conn:
         execute_with_retry(conn, sql, (product_id, folder_id))
 
+
+
+# TODO Phase 5 : ajouter FK DEFERRABLE INITIALLY DEFERRED une fois
+# que le pool est passé en mode transactionnel (autocommit=False par défaut).
+# Ordre insertion actuel : fact_sales AVANT dim_product/dim_customer
+# → FK strictes casseraient upsert_fact_from_webhook sans refactoring.
 # --------------------------- Schema creation ---------------------------
 def ensure_all_schemas():
     with get_connection() as conn:
@@ -1013,3 +1019,5 @@ def cancel_pending_emails_for(contact_key: str, product_id: str,
                 """, (contact_key, product_id))
     finally:
         _release_conn(conn)
+
+
