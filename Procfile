@@ -1,1 +1,1 @@
-web: gunicorn webhook_chariow_v1.app:app
+web: gunicorn webhook_app.app:app
