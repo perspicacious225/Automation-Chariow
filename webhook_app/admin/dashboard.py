@@ -591,7 +591,7 @@ def manage_mappings():
 def preview_template():
 
     try:
-        from webhook_app.services.mailer import render_email_with_brand as _brand_wrap
+        from webhook_app.templates.messages import render_email_with_brand as _brand_wrap
         
     except Exception:
         def _brand_wrap(fragment_html, tvars):

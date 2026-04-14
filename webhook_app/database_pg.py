@@ -782,50 +782,6 @@ def rfm_recompute():
                 (ck, fs_dt, ls_dt, None, int(fqv), float(mv), float(rd), float(f), float(m), seg(r,f,m))
             )
 
-        def _quantiles(vals):
-            if not vals: return (0,0,0,0)
-            vs = sorted(vals)
-            def q(p):
-                i = max(0, min(len(vs)-1, int(round(p*(len(vs)-1)))))
-                return vs[i]
-            return (q(0.2), q(0.4), q(0.6), q(0.8))
-
-        rq, fq, mq = _quantiles(rec_days), _quantiles(freqs), _quantiles(mons)
-
-        def score_recency(d):
-            return 5 if d <= rq[0] else 4 if d <= rq[1] else 3 if d <= rq[2] else 2 if d <= rq[3] else 1
-
-        def score_quantile(x, qs):
-            return 1 if x <= qs[0] else 2 if x <= qs[1] else 3 if x <= qs[2] else 4 if x <= qs[3] else 5
-
-        def seg(r,f,m):
-            if r>=4 and f>=4 and m>=4: return "Champions"
-            if r>=4 and f>=3:          return "Fidèles"
-            if r>=3 and f>=2 and m>=3: return "Prometteurs"
-            if r<=2 and f>=3:          return "À réactiver"
-            if r<=2 and f<=2 and m<=2: return "À risque"
-            return "Standard"
-
-        for ck, rd, fqv, mv, fs_dt, ls_dt in tmp:
-            r = score_recency(rd); f = score_quantile(fqv, fq); m = score_quantile(mv, mq)
-            execute_with_retry(conn,
-                """
-                INSERT INTO dim_customer(contact_key, first_seen, last_seen, country, orders_count, gmv_total,
-                                         rfm_recency_days, rfm_frequency, rfm_monetary, rfm_segment)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (contact_key) DO UPDATE SET
-                  first_seen=EXCLUDED.first_seen,
-                  last_seen=EXCLUDED.last_seen,
-                  orders_count=EXCLUDED.orders_count,
-                  gmv_total=EXCLUDED.gmv_total,
-                  rfm_recency_days=EXCLUDED.rfm_recency_days,
-                  rfm_frequency=EXCLUDED.rfm_frequency,
-                  rfm_monetary=EXCLUDED.rfm_monetary,
-                  rfm_segment=EXCLUDED.rfm_segment
-                """,
-                (ck, fs_dt, ls_dt, None, int(fqv), float(mv), float(rd), float(f), float(m), seg(r,f,m))
-            )
-
 
 # --------------------------- Cadence / anti-spam ---------------------------
 def has_active_cadence_for(contact_key: str, product_id: str) -> bool:

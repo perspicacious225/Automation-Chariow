@@ -85,8 +85,9 @@ class Notifier:
             pa = None
 
         # fallback s’il manque le prix barré : garde un différentiel lisible
-        if (pa is None or pa == 0) and pc:
-            pa = round(pc * 3.5)
+        multiplier = Config.PRICE_FALLBACK_MULTIPLIER
+        if (pa is None or pa == 0) and pc and multiplier > 0:
+            pa = round(pc * multiplier)
 
         return pc, pa, cur
 
