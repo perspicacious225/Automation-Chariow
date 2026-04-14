@@ -66,7 +66,7 @@ def _process_pending_emails(email_service):
                             old_job["id"], contact_key)
 
             # Envoie le plus récent
-            payload = json.loads(to_send["payload_json"])
+            payload = to_send["payload_json"] if isinstance(to_send["payload_json"], dict) else json.loads(to_send["payload_json"])
             ok = email_service.send_email(
                 recipient=payload["email_raw"],
                 subject=payload["subject"],
