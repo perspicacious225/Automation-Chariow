@@ -16,8 +16,6 @@ default_dump = "/opt/data/last_webhook.json" if IS_RENDER else _local_dump()
 
 DB_PATH = os.getenv("DATABASE_URL", default_db)
 WEBHOOK_DUMP_PATH = os.getenv("WEBHOOK_DUMP_PATH", default_dump)
-PRICE_FALLBACK_MULTIPLIER = float(os.getenv("PRICE_FALLBACK_MULTIPLIER", "0"))
-# 0 = désactivé — on n'invente pas de prix barré si absent du webhook
 
 def _ensure_writable(path, fallback):
     d = os.path.dirname(path) or "."
@@ -55,6 +53,7 @@ class Config:
     # Sécurité Webhook / Email
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
     SENDER_EMAIL   = os.getenv("SENDER_EMAIL")
+    PRICE_FALLBACK_MULTIPLIER = float(os.getenv("PRICE_FALLBACK_MULTIPLIER", "0"))
 
     # ==== Anti-spam (client + produit) ====
     # Fenêtre anti-redémarrage d'une nouvelle cadence pour le même contact+produit 
