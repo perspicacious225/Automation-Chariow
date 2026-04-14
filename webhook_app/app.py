@@ -20,7 +20,8 @@ from webhook_app.services.mailer import EmailService
 from webhook_app.models.sale import Sale
 
 def create_app():
-    logging.basicConfig(level=logging.INFO)
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
     logger = logging.getLogger(__name__)
 
     app = Flask(__name__)
