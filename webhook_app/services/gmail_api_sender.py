@@ -66,15 +66,21 @@ class EmailService:
                 logger.exception("Alerte WhatsApp admin échouée.")
 
     def is_available(self) -> bool:
-        """Teste si Gmail API est opérationnelle (ping léger)."""
+        """Teste si Gmail API est opérationnelle."""
         if not self.service:
             return False
         try:
-            self.service.users().getProfile(userId="me").execute()
-            if not self.available:
+            if self.creds and self.creds.valid:
+                if not self.available:
+                    self.available = True
+                    logger.info("Gmail API revenue disponible.")
+                return True
+            elif self.creds and self.creds.expired and self.creds.refresh_token:
+                self.creds.refresh(Request())
                 self.available = True
-                logger.info("Gmail API revenue disponible.")
-            return True
+                return True
+            self.available = False
+            return False
         except Exception:
             self.available = False
             return False
