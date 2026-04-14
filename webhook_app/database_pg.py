@@ -928,3 +928,88 @@ def get_template(product_id, template_type, channel):
             """,
             (template_type, channel), fetch="one")
         return dict(row) if row else None
+    
+
+# ── Email pending : rattrapage Gmail ────────────────────────────────────────
+
+def fetch_pending_emails() -> dict:
+    """
+    Retourne tous les jobs email_pending groupés par contact_key.
+    Format : { contact_key: [job, ...] }
+    """
+    conn = _get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, sale_id, template_type, due_at, payload_json,
+                       contact_key, product_id, ab_arm
+                FROM scheduled_notifications
+                WHERE template_type LIKE 'email_pending::%%'
+                  AND sent_at IS NULL
+                ORDER BY contact_key, due_at DESC
+            """)
+            rows = cur.fetchall()
+        result = {}
+        for row in rows:
+            ck = row["contact_key"] or "unknown"
+            result.setdefault(ck, []).append(dict(row))
+        return result
+    finally:
+        _release_conn(conn)
+
+
+def mark_pending_email_sent(job_id: int, payload: dict):
+    """Marque un email_pending comme envoyé + loggue dans notification_log."""
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Marque le job
+            cur.execute(
+                "UPDATE scheduled_notifications SET sent_at = NOW() WHERE id = %s",
+                (job_id,)
+            )
+            # Log dans notification_log
+            cur.execute("""
+                INSERT INTO notification_log
+                    (sale_id, channel, template_type, recipient,
+                     recipient_email, contact_key, product_id, ab_arm)
+                VALUES (%s, 'email', %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            """, (
+                payload.get("sale", {}).get("id", ""),
+                payload.get("template_type", "email_pending"),
+                payload.get("email_raw", ""),
+                payload.get("email_norm", ""),
+                payload.get("contact_key", ""),
+                payload.get("product_key", ""),
+                payload.get("ab_arm", ""),
+            ))
+    finally:
+        _release_conn(conn)
+
+
+def cancel_pending_emails_for(contact_key: str, product_id: str,
+                               exclude_id: int | None = None):
+    """Annule les jobs email_pending d'un contact (sauf exclude_id)."""
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            if exclude_id:
+                cur.execute("""
+                    UPDATE scheduled_notifications
+                    SET sent_at = NOW(), error = 'cancelled_pending_older'
+                    WHERE contact_key = %s AND product_id = %s
+                      AND template_type LIKE 'email_pending::%%'
+                      AND sent_at IS NULL
+                      AND id != %s
+                """, (contact_key, product_id, exclude_id))
+            else:
+                cur.execute("""
+                    UPDATE scheduled_notifications
+                    SET sent_at = NOW(), error = 'cancelled_pending_post_purchase'
+                    WHERE contact_key = %s AND product_id = %s
+                      AND template_type LIKE 'email_pending::%%'
+                      AND sent_at IS NULL
+                """, (contact_key, product_id))
+    finally:
+        _release_conn(conn)

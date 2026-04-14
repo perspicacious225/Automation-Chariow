@@ -158,15 +158,13 @@ class Notifier:
 
         email_previously_sent = self._already_sent(sale, "email", template_type, email_key)
         if not email_previously_sent and email_raw:
-            # Cherche un template DB spécifique au produit
+            # Prépare le contenu du message (même si on doit le mettre en attente)
             dbtpl = get_template(sale.product_id, template_type, "email")
             if dbtpl:
-                # Sujet
                 subject_tpl = (dbtpl.get("subject") or "").strip()
                 subject = subject_tpl.format_map(_SafeDict(tvars)) if subject_tpl else _render(
                     f"{messages.EMAIL_SUBJECTS.get(template_type,'')} {sale.store_name}".strip(), tvars
                 )
-                #mode HTML complet ou fragment
                 body_tpl = dbtpl.get("body") or ""
                 if int(dbtpl.get("is_full_html") or 0) == 1:
                     html = body_tpl.format_map(_SafeDict(tvars))
@@ -174,7 +172,6 @@ class Notifier:
                     fragment = body_tpl.format_map(_SafeDict(tvars))
                     html = render_email_with_brand(fragment, tvars)
             else:
-                # Fallback sur messages.py
                 tpl = messages.EMAIL_TEMPLATES.get(template_type)
                 sub = messages.EMAIL_SUBJECTS.get(template_type, "")
                 if not tpl:
@@ -183,24 +180,57 @@ class Notifier:
                 html = _render(tpl, tvars)
                 subject = _render(f"{sub} {sale.store_name}".strip(), tvars)
 
-            ok_email = self.email_service.send_email(
-                recipient=email_raw,
-                subject=subject,
-                html_body=html,
-                plain_fallback=to_plain(html)
-            )
-            if ok_email:
-                self.db.mark_notified(
-                    sale.id, "email", template_type, email_key,
-                    recipient_email=email_norm, contact_key=contact_key, product_id=product_key, ab_arm=ab_arm
+            # ── AJOUT : vérif disponibilité Gmail ──────────────────────────
+            if not self.email_service.is_available():
+                # Gmail KO → on enqueue un job email_pending
+                import datetime as _dt
+                sale_snapshot = self._sale_snapshot(sale)
+                enqueue_notification(
+                    sale.id,
+                    f"email_pending::{template_type}",   # canal spécial
+                    int(_dt.datetime.utcnow().timestamp()),  # due_at = maintenant
+                    {
+                        "sale": sale_snapshot,
+                        "subject": subject,
+                        "html": html,
+                        "email_raw": email_raw,
+                        "email_norm": email_norm,
+                        "email_key": email_key,
+                        "contact_key": contact_key,
+                        "product_key": product_key,
+                        "ab_arm": ab_arm,
+                    },
+                    contact_key=contact_key,
+                    product_id=product_key,
+                    ab_arm=ab_arm,
                 )
-                logger.info("[SENT][email] sale=%s template=%s to=%s", sale.id, template_type, email_key)
+                logger.warning(
+                    "[PENDING][email] Gmail KO — email mis en attente "
+                    "sale=%s template=%s to=%s", sale.id, template_type, email_raw
+                )
+            else:
+                # Gmail OK → envoi normal
+                ok_email = self.email_service.send_email(
+                    recipient=email_raw,
+                    subject=subject,
+                    html_body=html,
+                    plain_fallback=to_plain(html)
+                )
+                if ok_email:
+                    self.db.mark_notified(
+                        sale.id, "email", template_type, email_key,
+                        recipient_email=email_norm, contact_key=contact_key,
+                        product_id=product_key, ab_arm=ab_arm
+                    )
+                    logger.info("[SENT][email] sale=%s template=%s to=%s",
+                                sale.id, template_type, email_key)
+            # ───────────────────────────────────────────────────────────────
         else:
             if email_previously_sent:
-                logger.info("[SKIP][email] déjà envoyé: template=%s recipient=%s", template_type, email_key)
+                logger.info("[SKIP][email] déjà envoyé: template=%s recipient=%s",
+                            template_type, email_key)
             else:
                 logger.info("[SKIP][email] pas d'email pour sale=%s", sale.id)
-
         # -------- WHATSAPP --------
         send_whatsapp_allowed = WHATSAPP_AND_EMAIL_ALWAYS or (not email_previously_sent) or (email_norm is None)
         phone_raw = sale.customer_phone

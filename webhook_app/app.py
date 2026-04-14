@@ -53,7 +53,7 @@ def create_app():
         return notifier._send_notification(sale, template_type)
 
     if not getattr(app, "_scheduler_started", False):
-        start_scheduler(_send)
+        start_scheduler(_send, email_service=notifier.email_service)
         app._scheduler_started = True
 
     # ── Routes ────────────────────────────────────────────────────────────────

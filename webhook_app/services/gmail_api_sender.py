@@ -40,7 +40,44 @@ class EmailService:
             raise RuntimeError("SENDER_EMAIL manquant (expéditeur).")
         self.creds = None
         self.service = None
-        self._authenticate()
+        self.available = False          # ← AJOUT : False jusqu'à auth réussie
+        try:
+            self._authenticate()
+            self.available = True
+            logger.info("Gmail API initialisée avec succès.")
+        except Exception as e:
+            logger.error(
+                "Gmail API indisponible au démarrage — mode dégradé activé. "
+                "Les emails seront mis en attente. Erreur: %s", e
+            )
+            # Alerte WhatsApp admin
+            try:
+                admin_phone = os.getenv("ADMIN_PHONE_NUMBER")
+                if admin_phone:
+                    whatsapp_service.send_message(
+                        phone=admin_phone,
+                        message=(
+                            "⚠️ CHARIOW — Gmail API indisponible au démarrage.\n"
+                            "Les emails sont mis en attente.\n"
+                            "WhatsApp continue normalement."
+                        )
+                    )
+            except Exception:
+                logger.exception("Alerte WhatsApp admin échouée.")
+
+    def is_available(self) -> bool:
+        """Teste si Gmail API est opérationnelle (ping léger)."""
+        if not self.service:
+            return False
+        try:
+            self.service.users().getProfile(userId="me").execute()
+            if not self.available:
+                self.available = True
+                logger.info("Gmail API revenue disponible.")
+            return True
+        except Exception:
+            self.available = False
+            return False
 
     def _authenticate(self):
         """Charge/rafraîchit le token; en local permet l’obtention interactive."""
