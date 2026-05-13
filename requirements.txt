@@ -20,3 +20,5 @@ pgvector>=0.3.0
 
 # ── Découpage texte calibré en tokens ────────────────────────
 tiktoken>=0.7.0
+
+voyageai>=0.3.0
