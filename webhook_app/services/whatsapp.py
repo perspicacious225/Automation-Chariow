@@ -15,17 +15,16 @@ class WhatsAppService:
 
     @classmethod
     def _normalize_digits(cls, phone: str) -> Optional[str]:
-        """
-        Reprend EXACTEMENT la même logique que normalize_phone, mais retourne
-        uniquement les chiffres au format international (sans '@c.us').
-        """
         digits = re.sub(r"\D", "", phone or "")
         if digits.startswith("00"):
             digits = digits[2:]
 
         for rules in cls.COUNTRY_RULES.values():
             if digits.startswith(rules["code"] + rules["prefix"]) and rules["prefix"] == "0":
-                # enlève 'code' + '0' puis recolle 'code'
+                # CI : 2250XXXXXXXX (12 chiffres) → déjà normalisé, ne pas toucher
+                expected_full_length = len(rules["code"]) + 1 + (rules["length"] - 2)
+                if len(digits) == 12 and rules["code"] == "225":
+                    break  # déjà au bon format
                 digits = rules["code"] + digits[len(rules["code"]) + 2:]
                 break
             elif digits.startswith(rules["code"] + rules["prefix"]) and rules["prefix"] == "6":
@@ -52,10 +51,18 @@ class WhatsAppService:
         return f"{digits}@c.us" if digits else None
 
     def send_message(self, phone: str, message: str) -> bool:
-        chat_id = self.normalize_phone(phone)
-        if not chat_id:
+        digits = self._normalize_digits(phone)
+        if not digits:
             logger.error(f"Invalid phone: {phone}")
             return False
+
+        # 1. Chercher le LID en cache depuis conversations
+        chat_id = self._get_cached_lid(digits)
+
+        # 2. Si pas de cache → résoudre via CheckWhatsapp
+        if not chat_id:
+            lid = self._call_check_whatsapp(digits)
+            chat_id = lid if lid else f"{digits}@c.us"
 
         try:
             response = requests.post(
@@ -63,11 +70,99 @@ class WhatsAppService:
                 json={"chatId": chat_id, "message": message},
                 timeout=10
             )
+            logger.info(f"Green API status: {response.status_code} | chatId: {chat_id}")
             response.raise_for_status()
             logger.info(f"Message sent to {chat_id}")
             return True
         except Exception as e:
             logger.error(f"Failed to send to {chat_id}: {str(e)}")
+            return False
+
+
+    def _get_cached_lid(self, digits: str) -> Optional[str]:
+        """Cherche le LID dans conversations via le numéro normalisé."""
+        try:
+            # from webhook_app.database_conv import get_connection, execute_with_retry
+            from webhook_app.database_pg import get_connection as pg_get_connection, execute_with_retry as pg_exec
+            with pg_get_connection(readonly=True) as conn:
+                row = pg_exec(
+                    conn,
+                    """
+                    SELECT lid FROM conversations
+                    WHERE phone LIKE %s AND lid IS NOT NULL
+                    LIMIT 1
+                    """,
+                    (f"%{digits}%",),
+                    fetch="one",
+                )
+                if row and row.get("lid"):
+                    logger.debug(f"LID trouvé en cache pour {digits}: {row['lid']}")
+                    return row["lid"]
+        except Exception as e:
+            logger.debug(f"Cache LID non disponible pour {digits}: {e}")
+        return None
+        
+
+    
+        
+    def resolve_chat_id(self, phone_raw: str, conv_id: str | None = None) -> Optional[str]:
+        """
+        Convertit un chatId @c.us en LID valide via CheckWhatsapp.
+        Si conv_id fourni, utilise le cache DB pour éviter les appels répétés.
+        """
+        logger.info("resolve_chat_id — phone=%s | conv_id=%s", phone_raw, conv_id)
+        # Vérifier le cache DB d'abord
+        if conv_id:
+            from webhook_app.database_conv import get_or_set_lid
+            return get_or_set_lid(
+                conv_id=conv_id,
+                phone_raw=phone_raw,
+                resolver_fn=self._call_check_whatsapp,
+            )
+        
+
+        # Sans conv_id — appel direct
+        return self._call_check_whatsapp(phone_raw)
+
+
+    def _call_check_whatsapp(self, phone_raw: str) -> Optional[str]:
+        """Appel API CheckWhatsapp — logique isolée pour réutilisation."""
+        digits = phone_raw.replace("@c.us", "").strip()
+        try:
+            url = f"https://api.green-api.com/waInstance{Config.INSTANCE_ID}/checkWhatsapp/{Config.TOKEN}"
+            response = requests.post(
+                url,
+                json={"phoneNumber": digits},
+                timeout=10
+            )
+            data = response.json()
+            if data.get("existsWhatsapp") and data.get("chatId"):
+                logger.info(f"LID résolu : {digits} → {data['chatId']}")
+                return data["chatId"]
+        except Exception as e:
+            logger.error(f"resolve_chat_id failed for {digits}: {e}")
+        return None
+
+
+    def send_message_direct(self, chatId: str, message: str, conv_id: str | None = None) -> bool:
+        """Envoi avec résolution LID automatique."""
+        # Résoudre le vrai chatId via CheckWhatsapp
+        resolved = self.resolve_chat_id(chatId, conv_id=conv_id)
+        final_id = resolved or chatId
+        
+        try:
+            response = requests.post(
+                Config.API_URL,
+                json={"chatId": final_id, "message": message},
+                timeout=10
+            )
+            logger.info(f"Green API status: {response.status_code} | chatId: {final_id}")
+            logger.info(f"Green API body: {response.text}")
+            response.raise_for_status()
+            logger.info(f"Message sent to {final_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send to {final_id}: {str(e)}")
             return False
 
 # test =  WhatsAppService()

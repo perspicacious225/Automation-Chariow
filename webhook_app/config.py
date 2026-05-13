@@ -83,6 +83,22 @@ class Config:
     ALERT_ABANDON_SPIKE_FACTOR = float(os.getenv("ALERT_ABANDON_SPIKE_FACTOR", "2.0"))
     ALERT_CONV_DROP_FACTOR = float(os.getenv("ALERT_CONV_DROP_FACTOR", "0.5"))
 
+    LLM_PROVIDER         = os.getenv("LLM_PROVIDER", "anthropic")
+    LLM_MODEL            = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
+    LLM_API_KEY          = os.getenv("LLM_API_KEY")
+    LLM_MAX_TOKENS       = int(os.getenv("LLM_MAX_TOKENS", "1000"))
+
+    EMBEDDING_PROVIDER   = os.getenv("EMBEDDING_PROVIDER", "openai")
+    EMBEDDING_MODEL      = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    EMBEDDING_API_KEY    = os.getenv("VOYAGE_API_KEY")
+
+    RAG_TOP_K            = int(os.getenv("RAG_TOP_K", "5"))
+    RAG_MIN_SCORE        = float(os.getenv("RAG_MIN_SCORE", "0.35"))
+
+    MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "20"))
+
+    GREEN_API_WEBHOOK_SECRET = os.getenv("GREEN_API_WEBHOOK_SECRET")
+
 
 # ===== Strategy parameters =====
 # RELANCE_DELAYS = {

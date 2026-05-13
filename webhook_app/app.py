@@ -3,11 +3,13 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json, os, logging, hmac, hashlib          # ← CORRIGÉ : ajout hmac, hashlib
 from webhook_app.admin.dashboard import dashboard_bp
+
 from webhook_app.database_pg import (
     Database,
     init_pool, close_pool, ensure_all_schemas,
     save_webhook_raw, upsert_fact_from_webhook, rfm_recompute,
 )
+from webhook_app.database_conv import ConvDatabase
 from webhook_app.drive_service import grant_access_for_sale
 
 from flask_login import LoginManager
@@ -18,6 +20,11 @@ from webhook_app.services.notifier import Notifier
 from webhook_app.services.scheduler import start_scheduler
 from webhook_app.services.mailer import EmailService
 from webhook_app.models.sale import Sale
+
+# conversational services
+from webhook_app.services.whatsapp_inbound import inbound_bp
+from webhook_app.conversation.manager import ConversationManager
+from webhook_app.services.whatsapp import WhatsAppService
 
 def create_app():
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -49,6 +56,7 @@ def create_app():
     atexit.register(close_pool)
     ensure_all_schemas()
     db = Database()
+    ConvDatabase()
 
     def _send(sale, template_type):
         return notifier._send_notification(sale, template_type)
@@ -221,6 +229,35 @@ def create_app():
                 except Exception as e:
                     app.logger.error(f"Erreur partage Drive: {e}", exc_info=True)
                 notifier.handle_success(sale)
+            # Routing métier — EXISTANT
+            if sale.status == "abandoned":
+                notifier.handle_abandoned(sale)
+            elif sale.status == "failed":
+                notifier.handle_failed(sale)
+            elif sale.status == "completed":
+                try:
+                    app.logger.info(f"Vente réussie pour {sale.product_id}. Tentative partage Drive.")
+                    grant_access_for_sale(sale)
+                except Exception as e:
+                    app.logger.error(f"Erreur partage Drive: {e}", exc_info=True)
+                notifier.handle_success(sale)
+
+            # ── NOUVEAU : synchronisation contexte conversationnel ────────
+            try:
+                _phone_raw = sale.customer_phone or ""
+                if _phone_raw:
+                    _phone_norm = WhatsAppService.normalize_for_dedupe(_phone_raw)
+                    if _phone_norm:
+                        ConversationManager().on_payment_event(
+                            phone="+" + _phone_norm,
+                            event_type=payload.get("event", ""),
+                            sale_id=sale.id,
+                            product_id=sale.product_id,
+                            contact_key=sale.customer_email or _phone_norm,
+                        )
+            except Exception as e:
+                app.logger.warning(f"Sync contexte conv échouée (non bloquant): {e}")
+            # ──────────────────────────────────────────────────────────────
 
             # RFM (non critique, hors transaction)
             try:
@@ -238,6 +275,7 @@ def create_app():
         # ──────────────────────────────────────────────────────────────────────
 
     app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
+    app.register_blueprint(inbound_bp)
     return app
 
 

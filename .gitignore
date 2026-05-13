@@ -33,3 +33,9 @@ credentials_drive_acces.json
 
 *postgresql:
 *.idea
+
+test_pipeline_conv.py
+
+uv.lock
+
+*DEPLOY.md

@@ -1,0 +1,25 @@
+[project]
+name = "automation-chariow"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic>=0.25.0",
+    "filelock>=3.29.0",
+    "flask>=3.0.3",
+    "flask-cors>=6.0.2",
+    "flask-login>=0.6.3",
+    "google-api-python-client>=2.196.0",
+    "google-auth>=2.52.0",
+    "google-auth-oauthlib>=1.4.0",
+    "gunicorn>=26.0.0",
+    "openai>=1.30.0",
+    "pgvector>=0.3.0",
+    "psycopg2-binary>=2.9.12",
+    "python-dotenv>=1.2.2",
+    "requests>=2.34.0",
+    "tiktoken>=0.7.0",
+    "voyageai>=0.3.7",
+    "werkzeug==3.0.1",
+]

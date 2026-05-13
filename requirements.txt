@@ -10,3 +10,13 @@ flask_login
 filelock
 psycopg2-binary
 Werkzeug==3.0.1
+
+# ── LLM ──────────────────────────────────────────────────────
+anthropic>=0.25.0
+openai>=1.30.0
+
+# ── RAG / Vectoriel ──────────────────────────────────────────
+pgvector>=0.3.0
+
+# ── Découpage texte calibré en tokens ────────────────────────
+tiktoken>=0.7.0
