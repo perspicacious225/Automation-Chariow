@@ -347,31 +347,29 @@ def save_message(
         return str(row["id"]) if row else None
 
 
-def fetch_history(
-    conversation_id: str,
-    limit: int = 20,
-) -> list[dict]:
-    """
-    Retourne les N derniers messages d'une conversation,
-    dans l'ordre chronologique (le plus ancien en premier).
-    Utilisé pour construire le contexte LLM.
-    """
+def fetch_history(conv_id: str, limit: int = 20) -> list[dict]:
     with get_connection(readonly=True) as conn:
         rows = execute_with_retry(
             conn,
             """
-            SELECT role, content, timestamp, metadata
+            SELECT id, role, content, timestamp, metadata, feedback
             FROM messages
             WHERE conversation_id = %s
-            ORDER BY timestamp DESC
+            ORDER BY timestamp ASC
             LIMIT %s
             """,
-            (conversation_id, limit),
+            (conv_id, limit),
             fetch="all",
         ) or []
-        # Retourne en ordre chronologique (plus ancien en premier)
-        return [dict(r) for r in reversed(rows)]
-
+        result = []
+        for row in rows:
+            d = dict(row)
+            if isinstance(d.get("timestamp"), (datetime.datetime, datetime.date)):
+                d["timestamp"] = d["timestamp"].isoformat()
+            if d.get("id"):
+                d["id"] = str(d["id"])
+            result.append(d)
+        return result
 
 def message_already_exists(wa_message_id: str) -> bool:
     """Vérifie si un message entrant a déjà été traité (idempotence)."""

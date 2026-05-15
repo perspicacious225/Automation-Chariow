@@ -39,3 +39,5 @@ test_pipeline_conv.py
 uv.lock
 
 *DEPLOY.md
+
+database_v21_table.md

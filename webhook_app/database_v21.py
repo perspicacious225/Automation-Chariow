@@ -80,20 +80,18 @@ def upsert_prompt(key: str, label: str, content: str) -> bool:
 
 
 def init_default_prompts(default_prompts: dict[str, dict]) -> None:
-    """
-    Initialise les prompts par défaut en DB si absents.
-    Appelé au démarrage de l'app.
-    default_prompts : { key: { label, content } }
-    """
     existing = get_all_prompts()
     for key, data in default_prompts.items():
         if key not in existing:
             upsert_prompt(key, data["label"], data["content"])
             logger.info("Prompt initialisé en DB : %s", key)
         else:
-            logger.debug("Prompt déjà en DB : %s", key)
-
-
+            # Mettre à jour uniquement si le contenu a changé
+            if existing[key]["content"] != data["content"]:
+                upsert_prompt(key, data["label"], data["content"])
+                logger.info("Prompt mis à jour en DB : %s", key)
+            else:
+                logger.debug("Prompt inchangé : %s", key)
 # ══════════════════════════════════════════════════════════════════════════════
 # KB SOURCES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -159,7 +157,7 @@ def get_all_kb_sources() -> list[dict]:
             """
             SELECT product_id, filename, content
             FROM kb_sources
-            ORDER BY product_id, filename
+            ORDER BY product_id, filename  -- ← déjà là mais vérifier
             """,
             fetch="all",
         ) or []
@@ -453,3 +451,208 @@ def get_escalation_stats() -> dict:
             fetch="one",
         )
         return dict(row) if row else {}
+    
+
+# ══════════════════════════════════════════════════════════════════════════════
+# QUICK REPLIES
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_quick_replies(category: str | None = None) -> list[dict]:
+    """Retourne les réponses rapides actives."""
+    sql = "SELECT * FROM quick_replies WHERE is_active = TRUE"
+    params = []
+    if category:
+        sql += " AND category = %s"
+        params.append(category)
+    sql += " ORDER BY category, title"
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(conn, sql, params or None, fetch="all") or []
+        result = []
+        for row in rows:
+            d = dict(row)
+            for f in ("created_at", "updated_at"):
+                if isinstance(d.get(f), (datetime.datetime, datetime.date)):
+                    d[f] = d[f].isoformat()
+            result.append(d)
+        return result
+
+
+def create_quick_reply(title: str, content: str, category: str = "general") -> bool:
+    """Crée une nouvelle réponse rapide."""
+    with get_connection() as conn:
+        execute_with_retry(
+            conn,
+            "INSERT INTO quick_replies (title, content, category) VALUES (%s, %s, %s)",
+            (title, content, category),
+        )
+        return True
+
+
+def update_quick_reply(reply_id: str, title: str, content: str, category: str) -> bool:
+    """Met à jour une réponse rapide."""
+    with get_connection() as conn:
+        rc = execute_with_retry(
+            conn,
+            """
+            UPDATE quick_replies
+            SET title=%s, content=%s, category=%s, updated_at=NOW()
+            WHERE id=%s
+            """,
+            (title, content, category, reply_id),
+        )
+        return (rc or 0) > 0
+
+
+def delete_quick_reply(reply_id: str) -> bool:
+    """Supprime une réponse rapide."""
+    with get_connection() as conn:
+        rc = execute_with_retry(
+            conn,
+            "DELETE FROM quick_replies WHERE id = %s",
+            (reply_id,),
+        )
+        return (rc or 0) > 0
+
+
+def increment_quick_reply_usage(reply_id: str) -> None:
+    """Incrémente le compteur d'utilisation."""
+    with get_connection() as conn:
+        execute_with_retry(
+            conn,
+            "UPDATE quick_replies SET usage_count = usage_count + 1 WHERE id = %s",
+            (reply_id,),
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FEEDBACK MESSAGES
+# ══════════════════════════════════════════════════════════════════════════════
+
+def set_message_feedback(
+    message_id: str,
+    feedback: str,
+    note: str | None = None,
+) -> bool:
+    """
+    Enregistre le feedback admin sur un message IA.
+    feedback : 'good' | 'bad'
+    """
+    with get_connection() as conn:
+        rc = execute_with_retry(
+            conn,
+            """
+            UPDATE messages
+            SET feedback      = %s,
+                feedback_at   = NOW(),
+                feedback_note = %s
+            WHERE id = %s
+            """,
+            (feedback, note, message_id),
+        )
+        return (rc or 0) > 0
+
+
+def get_feedback_stats() -> dict:
+    """Stats globales du feedback qualité."""
+    with get_connection(readonly=True) as conn:
+        row = execute_with_retry(
+            conn,
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE feedback = 'good')  AS good,
+                COUNT(*) FILTER (WHERE feedback = 'bad')   AS bad,
+                COUNT(*) FILTER (WHERE feedback IS NOT NULL) AS total
+            FROM messages
+            WHERE role = 'assistant'
+            """,
+            fetch="one",
+        )
+        return dict(row) if row else {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ANALYTICS CONVERSION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_conversion_stats(days_back: int = 30) -> dict:
+    """Stats globales de conversion IA."""
+    with get_connection(readonly=True) as conn:
+        row = execute_with_retry(
+            conn,
+            "SELECT * FROM get_conversion_stats(%s)",
+            (days_back,),
+            fetch="one",
+        )
+        return dict(row) if row else {}
+
+
+def get_conversion_by_state(days_back: int = 30) -> list[dict]:
+    """Taux de conversion par état de départ."""
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(
+            conn,
+            "SELECT * FROM get_conversion_by_state(%s)",
+            (days_back,),
+            fetch="all",
+        ) or []
+        return [dict(r) for r in rows]
+
+
+def get_hourly_activity() -> list[dict]:
+    """Activité par heure sur 30 jours."""
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(
+            conn,
+            "SELECT * FROM hourly_activity",
+            fetch="all",
+        ) or []
+        return [dict(r) for r in rows]
+
+
+def get_volume_by_day(days_back: int = 30) -> list[dict]:
+    """Volume de conversations par jour."""
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(
+            conn,
+            """
+            SELECT
+                DATE(created_at AT TIME ZONE 'Africa/Abidjan') AS day,
+                COUNT(*)                                        AS conversations,
+                COUNT(*) FILTER (WHERE state IN ('payment_success','post_sale')) AS converted
+            FROM conversations
+            WHERE created_at >= NOW() - (%s || ' days')::INTERVAL
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            (days_back,),
+            fetch="all",
+        ) or []
+        result = []
+        for row in rows:
+            d = dict(row)
+            if hasattr(d.get("day"), "isoformat"):
+                d["day"] = d["day"].isoformat()
+            result.append(d)
+        return result
+
+
+def get_top_products_by_conversations(days_back: int = 30) -> list[dict]:
+    """Produits les plus demandés en conversation."""
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(
+            conn,
+            """
+            SELECT
+                COALESCE(product_id, 'inconnu') AS product_id,
+                COUNT(*)                         AS conversations,
+                COUNT(*) FILTER (WHERE state IN ('payment_success','post_sale')) AS converted
+            FROM conversations
+            WHERE created_at >= NOW() - (%s || ' days')::INTERVAL
+            GROUP BY product_id
+            ORDER BY conversations DESC
+            LIMIT 10
+            """,
+            (days_back,),
+            fetch="all",
+        ) or []
+        return [dict(r) for r in rows]

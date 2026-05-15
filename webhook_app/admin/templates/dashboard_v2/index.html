@@ -347,6 +347,7 @@ async function openPanel(convId) {
 
     renderHistory(data.history || []);
     renderContext(conv, data.sale);
+    
 
   } catch(e) {
     showToast('Erreur chargement conversation', 'error');
@@ -403,8 +404,8 @@ function switchTab(tab, el) {
   document.getElementById('tabContext').style.display  = tab === 'context'  ? 'block' : 'none';
 }
 
-/* ── Historique messages ────────────────────────────────────────── */
 function renderHistory(history) {
+  console.log('Premier message:', history[0]);
   if (!history.length) {
     document.getElementById('tabMessages').innerHTML = `
       <div style="text-align:center;padding:30px;color:var(--text-muted);font-size:12px;">
@@ -414,11 +415,13 @@ function renderHistory(history) {
   }
 
   document.getElementById('tabMessages').innerHTML = history.map(function(msg) {
-    var isUser = msg.role === 'user';
-    var isAdmin = (msg.content || '').startsWith('[ADMIN]');
-    var content = (msg.content || '').replace('[ADMIN] ', '');
+    var isUser  = msg.role === 'user';
+    var isAdmin = (msg.content || '').startsWith('[ADMIN]') || (msg.content || '').startsWith('[QUICK]');
+    var content = (msg.content || '').replace('[ADMIN] ', '').replace('[QUICK] ', '');
     var roleLabel = isAdmin ? 'Admin' : (isUser ? 'Client' : 'Assistant IA');
-    var time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'}) : '';
+    var time = msg.timestamp
+      ? new Date(msg.timestamp).toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'})
+      : '';
 
     var bubbleStyle = isUser
       ? 'background:var(--blue);color:#fff;border-bottom-right-radius:3px;'
@@ -426,14 +429,42 @@ function renderHistory(history) {
         ? 'background:rgba(239,159,39,0.1);border:0.5px solid rgba(239,159,39,0.3);color:var(--amber);border-bottom-left-radius:3px;'
         : 'background:var(--bg-elevated);border:0.5px solid var(--border);color:var(--text-primary);border-bottom-left-radius:3px;';
 
-    var align = isUser ? 'align-self:flex-end;' : 'align-self:flex-start;';
+    var align     = isUser ? 'align-self:flex-end;' : 'align-self:flex-start;';
     var timeAlign = isUser ? 'text-align:right;' : '';
+
+    // Feedback existant
+    var feedbackHtml = '';
+    if (!isUser && !isAdmin && msg.id) {
+      var hasFeedback = msg.feedback;
+      var goodStyle = msg.feedback === 'good'
+        ? 'opacity:1;color:var(--green);'
+        : 'opacity:.4;';
+      var badStyle = msg.feedback === 'bad'
+        ? 'opacity:1;color:var(--red);'
+        : 'opacity:.4;';
+
+      feedbackHtml = `
+        <div style="display:flex;gap:4px;margin-top:2px;">
+          <button onclick="sendFeedback('${msg.id}','good')"
+            style="background:transparent;border:none;cursor:pointer;font-size:14px;${goodStyle}transition:opacity .15s;"
+            onmouseover="this.style.opacity=1" onmouseout="this.style.opacity='${msg.feedback === 'good' ? 1 : 0.4}'"
+            title="Bonne réponse">👍</button>
+          <button onclick="sendFeedback('${msg.id}','bad')"
+            style="background:transparent;border:none;cursor:pointer;font-size:14px;${badStyle}transition:opacity .15s;"
+            onmouseover="this.style.opacity=1" onmouseout="this.style.opacity='${msg.feedback === 'bad' ? 1 : 0.4}'"
+            title="Mauvaise réponse">👎</button>
+          ${hasFeedback ? `<span style="font-size:10px;color:var(--text-muted);align-self:center;">${msg.feedback === 'good' ? 'Bonne réponse' : 'À améliorer'}</span>` : ''}
+        </div>`;
+    }
 
     return `
     <div style="max-width:82%;display:flex;flex-direction:column;gap:2px;${align}animation:msg-in 0.2s ease;">
       <div style="font-size:10px;color:var(--text-muted);${timeAlign}">${roleLabel}</div>
-      <div style="padding:8px 12px;border-radius:10px;font-size:12px;line-height:1.55;${bubbleStyle}">${escapeHtml(content)}</div>
+      <div style="padding:8px 12px;border-radius:10px;font-size:12px;line-height:1.55;${bubbleStyle}">
+        ${escapeHtml(content)}
+      </div>
       <div style="font-size:10px;color:var(--text-muted);${timeAlign}">${time}</div>
+      ${feedbackHtml}
     </div>`;
   }).join('');
 
@@ -514,6 +545,28 @@ async function toggleAI() {
   } catch(e) {
     showToast('Erreur : ' + e.message, 'error');
   }
+}
+
+
+async function loadConversationsSilent() {
+    var url = '/dashboard/v2/api/conversations/?limit=' + PAGE_SIZE 
+              + '&offset=' + (currentPage * PAGE_SIZE);
+    if (currentState) url += '&state=' + currentState;
+    try {
+        var data = await api('GET', url);
+        renderStats(data.stats || {});
+        renderList(data.conversations || []);
+        var s = data.stats || {};
+        var setB = function(id, val) {
+            var el = document.getElementById(id);
+            if (el) el.textContent = val || 0;
+        };
+        setB('badge-total', s.total);
+        setB('badge-escalation', s.escalations);
+        setB('badge-human', s.human_active);
+        document.getElementById('convCount').textContent = 
+            '— ' + (s.total || 0) + ' actives';
+    } catch(e) { /* silencieux */ }
 }
 
 /* ── Forcer état ────────────────────────────────────────────────── */
@@ -615,5 +668,23 @@ document.addEventListener('DOMContentLoaded', function() {
     loadConversationsSilent();
 }, 10000);
 });
+
+async function sendFeedback(messageId, feedback) {
+  try {
+    await api('POST', '/dashboard/v2/api/messages/' + messageId + '/feedback/', { feedback });
+    showToast(
+      feedback === 'good' ? '👍 Bonne réponse enregistrée' : '👎 Réponse à améliorer enregistrée',
+      feedback === 'good' ? 'success' : 'warning'
+    );
+    // Rafraîchir le panel pour mettre à jour l'état des boutons
+    if (currentConvId) {
+      var data = await api('GET', '/dashboard/v2/api/conversations/' + currentConvId + '/');
+      renderHistory(data.history || []);
+    }
+  } catch(e) {
+    showToast('Erreur feedback : ' + e.message, 'error');
+  }
+}
+
 </script>
 {% endblock %}

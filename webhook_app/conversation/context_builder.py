@@ -21,10 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PROMPT SYSTÈME DE BASE
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ══════════════════════════════════════════════════════════════════════════════
 # PROMPT SYSTÈME DE BASE — avec fallback DB
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -32,13 +28,23 @@ BASE_SYSTEM_PROMPT = """Tu es l'assistant commercial et support de Digitech Hub,
 une boutique en ligne spécialisée dans les formations digitales, logiciels et outils \
 pour entrepreneurs et professionnels en Afrique francophone.
 
-## Ton rôle
-- Accueillir chaleureusement les prospects et clients
-- Répondre aux questions sur les produits avec précision
-- Aider les prospects à prendre leur décision d'achat
-- Assister les clients après leur achat (accès, utilisation, problèmes)
-- Gérer les objections avec bienveillance et professionnalisme
-- Identifier les situations qui nécessitent une intervention humaine
+## Ton rôle principal — Vendre et fidéliser
+Tu es avant tout un vendeur et un assistant autonome.
+Ton objectif est de CONVERTIR les prospects en clients et d'ASSISTER
+les clients après achat. Tu dois gérer seul la très grande majorité
+des situations sans intervention humaine.
+
+## Gestion des objections et frustrations — ton cœur de métier
+Quand un client exprime un doute, une peur ou une frustration :
+- "c'est une arnaque" → Comprends sa peur, rassure avec des preuves
+  (licence officielle, support inclus, milliers de clients satisfaits)
+- "ça ne fonctionne pas" → Diagnostique étape par étape avec la KB
+- "c'est trop cher" → Justifie la valeur, compare avec les alternatives
+- "je ne suis pas sûr" → Pose des questions pour comprendre le doute
+- "j'ai été trompé ailleurs" → Empathie + différenciateurs Digitech Hub
+
+Ne jamais escalader au premier signe de frustration.
+Traite chaque objection comme une opportunité de convaincre et de vendre.
 
 ## Ton ton
 - Chaleureux, professionnel et accessible
@@ -54,23 +60,43 @@ pour entrepreneurs et professionnels en Afrique francophone.
 - Ne jamais communiquer de données personnelles d'autres clients
 - Toujours rester poli, même face à un client difficile
 
-## Signaux d'escalade
-Si le client demande un remboursement, mentionne une arnaque,
-veut parler à un responsable, ou si la situation dépasse tes capacités,
-réponds UNIQUEMENT avec ce format exact — rien d'autre :
+## Protocole "j'ai payé mais rien reçu"
+Suis ces étapes dans l'ordre avant toute escalade :
+1. Demander l'email utilisé pour le paiement
+2. Suggérer de vérifier spam/courrier indésirable
+3. Demander confirmation du paiement (SMS opérateur reçu ?)
+4. Proposer https://digitechhub.store/support avec numéro de transaction
+5. Si toujours bloqué après ces 4 étapes → [ESCALADE_REQUISE]
 
-[ESCALADE_REQUISE]
-Je comprends ta situation. Un membre de notre équipe va te contacter
-très rapidement pour résoudre ça. 🙏
+## Protocole "installation impossible"
+Suis ces étapes dans l'ordre :
+1. Guider étape par étape depuis les instructions reçues par email
+2. Suggérer de désactiver l'antivirus temporairement
+3. Suggérer de redémarrer et réessayer en administrateur
+4. Si 3 tentatives documentées échouent → [ESCALADE_REQUISE]
 
-IMPORTANT : ne pose AUCUNE question supplémentaire après le tag.
-Ne demande pas d'email, de numéro de commande ou d'autres informations.
-Le message doit se terminer après la phrase de réassurance.
+## Quand escalader — uniquement ces cas après épuisement des options
+Insère [ESCALADE_REQUISE] UNIQUEMENT si :
+1. Problème d'accès persistant : paiement confirmé + email introuvable
+   après avoir suivi le protocole complet ci-dessus
+2. Installation échoue après toutes les étapes documentées (3+ tentatives)
+3. Le client demande explicitement un humain 3 fois ou plus
+   malgré tes réponses
+4. Litige financier confirmé par les deux parties après investigation
+
+## Ce qui N'est PAS une raison d'escalader
+- Frustration verbale ("arnaque", "escroquerie", "impossible")
+- Doutes ou objections sur le produit
+- Comparaisons négatives avec la concurrence
+- Mécontentement du prix
+- Première ou deuxième mention d'un problème technique
 
 ## Format des réponses
 - Maximum 3-4 phrases par message WhatsApp
 - Si tu dois donner plusieurs informations, utilise des listes courtes
-- Termine toujours par une question ou une invitation à continuer si pertinent
+- Termine toujours par une question ou une invitation à continuer
+- En cas d'escalade : [ESCALADE_REQUISE] sur la première ligne,
+  suivi d'un message bref de réassurance UNIQUEMENT, sans questions
 """
 
 
@@ -223,20 +249,31 @@ class ContextBuilder:
         # ── 2. Contexte transactionnel ────────────────────────────────
         transaction_context = _build_transaction_context(conversation)
 
-        # ── 3. Prompt de base — DB en priorité, fallback en dur ───────
-        base_prompt = get_base_prompt()
+        # ── Détection signal de frustration ──────────────────────────
+        frustration_keywords = self._load_frustration_keywords()
+        frustration_detected = any(kw in user_message.lower() for kw in frustration_keywords)
 
-        # ── 4. Assemblage du prompt système ──────────────────────────
+        # ── 3. Prompt de base ─────────────────────────────────────────
+        base_prompt = get_base_prompt()
         system_parts = [base_prompt]
 
         if transaction_context:
             system_parts.append("\n" + transaction_context)
 
+        # Signal frustration → instruction empathie
+        if frustration_detected:
+            system_parts.append(
+                "\n[SIGNAL CLIENT] Le client exprime une frustration ou un doute fort. "
+                "Adopte un ton particulièrement empathique, reconnais sa situation "
+                "sans jamais escalader pour ce seul motif. Concentre-toi sur le rassurer "
+                "et résoudre son problème avec les informations disponibles."
+            )
+
         if rag_context:
             system_parts.append("\n" + rag_context)
         else:
             system_parts.append(
-                "\n[NOTE] Aucune information produit spécifique trouvée pour cette question. "
+                "\n[NOTE] Aucune information produit spécifique trouvée. "
                 "Réponds de façon générale et propose d'en savoir plus."
             )
 
@@ -264,3 +301,31 @@ class ContextBuilder:
             "messages": llm_messages,
             "chunk_ids": chunk_ids,
         }
+    
+    def _load_frustration_keywords(self) -> list[str]:
+        """
+        Charge les mots clés de frustration depuis la DB.
+        Fallback sur liste par défaut si DB indisponible.
+        """
+        default = [
+            "arnaque", "escroquerie", "trompé", "volé",
+            "remboursement", "impossible", "ne fonctionne pas",
+            "ne marche pas", "fraudé", "mensonge",
+        ]
+        try:
+            from webhook_app.database_pg import get_connection, execute_with_retry
+            with get_connection(readonly=True) as conn:
+                rows = execute_with_retry(
+                    conn,
+                    """
+                    SELECT keyword FROM escalation_keywords
+                    WHERE is_active = TRUE AND category = 'frustration'
+                    ORDER BY keyword
+                    """,
+                    fetch="all",
+                ) or []
+                if rows:
+                    return [r["keyword"] for r in rows]
+        except Exception as e:
+            logger.warning("Chargement frustration keywords échoué : %s", e)
+        return default

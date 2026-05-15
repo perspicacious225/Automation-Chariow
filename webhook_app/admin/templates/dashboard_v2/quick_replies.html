@@ -1,0 +1,287 @@
+{% extends "dashboard_v2/base.html" %}
+
+{% block title %}Réponses rapides{% endblock %}
+
+{% block topbar %}
+<div class="topbar">
+  <div>
+    <span class="topbar-title">Réponses rapides</span>
+    <span class="topbar-sub" id="qrSubtitle">Chargement...</span>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-ghost btn-sm" onclick="loadReplies()">
+      <i class="ti ti-refresh"></i> Actualiser
+    </button>
+    <button class="btn btn-primary btn-sm" onclick="openAddModal()">
+      <i class="ti ti-plus"></i> Nouvelle réponse
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Filtres catégorie -->
+<div class="filter-row" style="margin-bottom:16px;">
+  <button class="chip active" data-cat="">Toutes</button>
+  <button class="chip" data-cat="general">Général</button>
+  <button class="chip" data-cat="sales">Vente</button>
+  <button class="chip" data-cat="support">Support</button>
+  <button class="chip" data-cat="post_sale">Post-achat</button>
+</div>
+
+<!-- Grille réponses -->
+<div id="repliesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;">
+  {% for i in range(4) %}
+  <div class="skeleton" style="height:140px;border-radius:12px;"></div>
+  {% endfor %}
+</div>
+
+<!-- Modal ajouter / éditer -->
+<div class="modal-overlay" id="modalReply">
+  <div class="modal-box" style="width:520px;">
+    <div class="modal-header">
+      <div class="modal-title" id="replyModalTitle">Nouvelle réponse rapide</div>
+      <button class="btn-icon" onclick="closeModal('modalReply')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editReplyId" value="" />
+      <div class="form-group">
+        <label class="form-label">Titre</label>
+        <input class="form-input" id="replyTitle" placeholder="Ex: Confirmation réception" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Catégorie</label>
+        <select class="form-select" id="replyCategory">
+          <option value="general">Général</option>
+          <option value="sales">Vente</option>
+          <option value="support">Support</option>
+          <option value="post_sale">Post-achat</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          Contenu
+          <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px;">
+            Variables : {checkout_url} {product_name} {customer_first_name}
+          </span>
+        </label>
+        <textarea class="form-textarea" id="replyContent" rows="4"
+          placeholder="Votre message WhatsApp..."></textarea>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;" id="replyCharCount">0 caractères</div>
+      </div>
+      <!-- Prévisualisation -->
+      <div style="background:var(--bg-base);border:0.5px solid var(--border);border-radius:8px;padding:12px;">
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Prévisualisation WhatsApp</div>
+        <div id="replyPreview" style="font-size:12px;color:var(--text-primary);line-height:1.6;white-space:pre-wrap;">—</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalReply')">Annuler</button>
+      <button class="btn btn-primary" onclick="saveReply()">
+        <i class="ti ti-device-floppy"></i> Sauvegarder
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal confirmer suppression -->
+<div class="modal-overlay" id="modalDelete">
+  <div class="modal-box" style="width:360px;">
+    <div class="modal-header">
+      <div class="modal-title">Supprimer cette réponse ?</div>
+      <button class="btn-icon" onclick="closeModal('modalDelete')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--text-primary);margin-bottom:6px;" id="deleteReplyTitle">—</div>
+      <div style="font-size:12px;color:var(--text-muted);">Cette action est irréversible.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalDelete')">Annuler</button>
+      <button class="btn btn-danger" onclick="confirmDelete()" style="background:var(--red);color:#fff;border:none;">
+        <i class="ti ti-trash"></i> Supprimer
+      </button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var allReplies = [];
+var currentCat = '';
+var deleteId = null;
+
+var CAT_COLORS = {
+  general:  { color:'var(--blue-light)',   bg:'rgba(30,111,217,0.1)',   label:'Général' },
+  sales:    { color:'var(--green)',         bg:'rgba(29,158,117,0.1)',   label:'Vente' },
+  support:  { color:'var(--amber)',         bg:'rgba(239,159,39,0.1)',   label:'Support' },
+  post_sale:{ color:'var(--cyan)',          bg:'rgba(0,212,255,0.1)',    label:'Post-achat' },
+};
+
+async function loadReplies() {
+  try {
+    var data = await api('GET', '/dashboard/v2/api/quick-replies/');
+    allReplies = data.quick_replies || [];
+    document.getElementById('qrSubtitle').textContent = '— ' + allReplies.length + ' réponses';
+    renderReplies(allReplies);
+  } catch(e) {
+    showToast('Erreur chargement réponses', 'error');
+  }
+}
+
+function renderReplies(items) {
+  var filtered = currentCat
+    ? items.filter(function(i) { return i.category === currentCat; })
+    : items;
+
+  if (!filtered.length) {
+    document.getElementById('repliesGrid').innerHTML = `
+      <div style="grid-column:1/-1;text-align:center;padding:48px;color:var(--text-muted);">
+        <i class="ti ti-messages" style="font-size:36px;display:block;margin-bottom:10px;opacity:.3;"></i>
+        <div style="font-size:13px;">Aucune réponse rapide</div>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('repliesGrid').innerHTML = filtered.map(function(r) {
+    var cat = CAT_COLORS[r.category] || { color:'var(--text-muted)', bg:'rgba(136,153,170,0.1)', label: r.category };
+    var preview = (r.content || '').substring(0, 100) + (r.content.length > 100 ? '...' : '');
+
+    return `
+    <div style="background:var(--bg-elevated);border:0.5px solid var(--border);border-radius:12px;
+                padding:14px;display:flex;flex-direction:column;gap:10px;transition:all .2s;"
+         onmouseover="this.style.borderColor='var(--blue)'" onmouseout="this.style.borderColor='var(--border)'">
+
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:3px;">
+            ${escapeHtml(r.title)}
+          </div>
+          <span style="display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:500;
+                       background:${cat.bg};color:${cat.color};">
+            ${cat.label}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0;">
+          <button class="btn-icon" title="Éditer" onclick="openEditModal('${r.id}')">
+            <i class="ti ti-edit" style="font-size:14px;"></i>
+          </button>
+          <button class="btn-icon" title="Supprimer" onclick="promptDelete('${r.id}','${escapeHtml(r.title)}')"
+            style="color:var(--red);">
+            <i class="ti ti-trash" style="font-size:14px;"></i>
+          </button>
+        </div>
+      </div>
+
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.5;flex:1;">
+        ${escapeHtml(preview)}
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:10px;color:var(--text-muted);">
+          <i class="ti ti-send" style="font-size:11px;margin-right:2px;"></i>
+          Utilisé ${r.usage_count || 0} fois
+        </span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* Filtres */
+document.querySelectorAll('.chip').forEach(function(chip) {
+  chip.addEventListener('click', function() {
+    document.querySelectorAll('.chip').forEach(function(c) { c.classList.remove('active'); });
+    chip.classList.add('active');
+    currentCat = chip.dataset.cat || '';
+    renderReplies(allReplies);
+  });
+});
+
+/* Prévisualisation en temps réel */
+document.addEventListener('DOMContentLoaded', function() {
+  var ta = document.getElementById('replyContent');
+  if (ta) {
+    ta.addEventListener('input', function() {
+      document.getElementById('replyCharCount').textContent = ta.value.length + ' caractères';
+      document.getElementById('replyPreview').textContent = ta.value || '—';
+    });
+  }
+  loadReplies();
+});
+
+function openAddModal() {
+  document.getElementById('replyModalTitle').textContent = 'Nouvelle réponse rapide';
+  document.getElementById('editReplyId').value = '';
+  document.getElementById('replyTitle').value = '';
+  document.getElementById('replyContent').value = '';
+  document.getElementById('replyCategory').value = 'general';
+  document.getElementById('replyPreview').textContent = '—';
+  document.getElementById('replyCharCount').textContent = '0 caractères';
+  openModal('modalReply');
+}
+
+function openEditModal(id) {
+  var reply = allReplies.find(function(r) { return r.id === id; });
+  if (!reply) return;
+  document.getElementById('replyModalTitle').textContent = 'Éditer — ' + reply.title;
+  document.getElementById('editReplyId').value = reply.id;
+  document.getElementById('replyTitle').value = reply.title;
+  document.getElementById('replyContent').value = reply.content;
+  document.getElementById('replyCategory').value = reply.category || 'general';
+  document.getElementById('replyPreview').textContent = reply.content;
+  document.getElementById('replyCharCount').textContent = reply.content.length + ' caractères';
+  openModal('modalReply');
+}
+
+async function saveReply() {
+  var id       = document.getElementById('editReplyId').value;
+  var title    = document.getElementById('replyTitle').value.trim();
+  var content  = document.getElementById('replyContent').value.trim();
+  var category = document.getElementById('replyCategory').value;
+
+  if (!title || !content) {
+    showToast('Titre et contenu requis', 'warning');
+    return;
+  }
+
+  try {
+    if (id) {
+      await api('PUT', '/dashboard/v2/api/quick-replies/' + id + '/', { title, content, category });
+      showToast('Réponse mise à jour', 'success');
+    } else {
+      await api('POST', '/dashboard/v2/api/quick-replies/', { title, content, category });
+      showToast('Réponse créée', 'success');
+    }
+    closeModal('modalReply');
+    loadReplies();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+function promptDelete(id, title) {
+  deleteId = id;
+  document.getElementById('deleteReplyTitle').textContent = title;
+  openModal('modalDelete');
+}
+
+async function confirmDelete() {
+  if (!deleteId) return;
+  try {
+    await fetch('/dashboard/v2/api/quick-replies/' + deleteId + '/', { method: 'DELETE' });
+    closeModal('modalDelete');
+    showToast('Réponse supprimée', 'success');
+    deleteId = null;
+    loadReplies();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}

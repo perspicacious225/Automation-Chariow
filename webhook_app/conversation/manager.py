@@ -156,33 +156,22 @@ class ConversationManager:
             user_message=text,
         )
 
-        # 8. Escalade immédiate ou appel LLM
-        if self.state_machine.should_escalate(text):
-            logger.info("Escalade immédiate détectée avant LLM")
+        # Appel LLM direct — le modèle juge seul si escalade nécessaire
+        try:
+            response_text, chunk_ids = self.llm_engine.generate(
+                system_prompt=context["system_prompt"],
+                messages=context["messages"],
+            )
+        except Exception as e:
+            logger.exception("Erreur LLM pour conversation %s : %s", conv_id, e)
             response_text = (
-                "Je comprends ta situation. Un membre de notre équipe "
-                "va te contacter très rapidement pour résoudre ça. 🙏"
+                "Désolé, je rencontre une difficulté technique en ce moment. "
+                "Un membre de notre équipe va vous répondre très bientôt. 🙏"
             )
             chunk_ids = []
-            escalade_requise = True
 
-        else:
-            # Appeler le LLM
-            try:
-                response_text, chunk_ids = self.llm_engine.generate(
-                    system_prompt=context["system_prompt"],
-                    messages=context["messages"],
-                )
-            except Exception as e:
-                logger.exception("Erreur LLM pour conversation %s : %s", conv_id, e)
-                response_text = (
-                    "Désolé, je rencontre une difficulté technique en ce moment. "
-                    "Un membre de notre équipe va vous répondre très bientôt. 🙏"
-                )
-                chunk_ids = []
-
-            # Détecter escalade via tag LLM
-            escalade_requise = "[ESCALADE_REQUISE]" in response_text
+        # Détecter escalade via tag LLM uniquement
+        escalade_requise = "[ESCALADE_REQUISE]" in response_text
 
         logger.info("=== ESCALADE CHECK ===")
         logger.info("response_text brut : %s", response_text[:200])

@@ -323,9 +323,17 @@ def create_app():
             logger.warning("Init prompts DB échouée : %s", e)
     with app.app_context():
         try:
+            from webhook_app.database_conv import count_chunks_by_product
             from webhook_app.rag.ingestion import ingest_all_from_db
-            ingest_all_from_db()
-            logger.info("KB réingérée depuis DB au démarrage")
+
+            existing = count_chunks_by_product()
+            if not existing:
+                logger.info("KB vide — réingestion depuis DB au démarrage")
+                ingest_all_from_db()
+            else:
+                total = sum(r.get("chunk_count", 0) for r in existing)
+                logger.info("KB déjà présente — %d chunks sur %d produits, pas de réingestion", 
+                            total, len(existing))
         except Exception as e:
             logger.warning("Réingestion KB au démarrage échouée : %s", e)
 

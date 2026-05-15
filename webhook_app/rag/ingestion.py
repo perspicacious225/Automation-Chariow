@@ -161,13 +161,15 @@ def split_into_chunks(text: str, source: str) -> list[dict]:
 def ingest_product(product_id: str, *, force: bool = False, text_override: str | None = None) -> dict:
     """
     Ingère le document d'un produit dans la knowledge base.
-    text_override : texte déjà extrait (depuis upload dashboard) — bypass lecture fichier.
+    text_override : texte déjà extrait (depuis upload dashboard ou ingest_all_from_db)
+                    → bypass lecture fichier ET bypass sauvegarde DB
+                      (les sources sont déjà sauvegardées avant l'appel)
     """
     # ── Source du texte ───────────────────────────────────────────
     if text_override:
-        # Texte fourni directement (upload dashboard)
+        # Texte fourni directement — sources déjà sauvegardées en DB
         text = text_override
-        source = f"{product_id}_upload"
+        source = f"{product_id}.md"
     else:
         # Lecture depuis le filesystem
         md_path = KB_DIR / f"{product_id}.md"
@@ -180,17 +182,20 @@ def ingest_product(product_id: str, *, force: bool = False, text_override: str |
     logger.info("Ingestion de %s...", product_id)
 
     # ── Sauvegarder la source en DB ───────────────────────────────
-    try:
-        save_kb_source(
-            product_id=product_id,
-            filename=source,
-            content=text,
-        )
-        logger.info("Source KB sauvegardée en DB : %s / %s", product_id, source)
-    except Exception as e:
-        logger.warning("Sauvegarde KB source échouée (non bloquant) : %s", e)
+    # UNIQUEMENT si lecture depuis filesystem (pas text_override)
+    # Quand text_override est fourni, les sources sont déjà en DB
+    if not text_override:
+        try:
+            save_kb_source(
+                product_id=product_id,
+                filename=source,
+                content=text,
+            )
+            logger.info("Source KB sauvegardée en DB : %s / %s", product_id, source)
+        except Exception as e:
+            logger.warning("Sauvegarde KB source échouée (non bloquant) : %s", e)
 
-    # Découpage
+    # ── Découpage ─────────────────────────────────────────────────
     chunks = split_into_chunks(text, source)
     if not chunks:
         logger.warning("Aucun chunk extrait pour %s", product_id)
@@ -198,7 +203,7 @@ def ingest_product(product_id: str, *, force: bool = False, text_override: str |
 
     logger.info("%d chunks extraits pour %s", len(chunks), product_id)
 
-    # Génération des embeddings en batch
+    # ── Génération des embeddings en batch ────────────────────────
     texts = [c["chunk_text"] for c in chunks]
     embeddings = embed_batch(texts)
 
@@ -206,12 +211,12 @@ def ingest_product(product_id: str, *, force: bool = False, text_override: str |
         logger.error("Mismatch embeddings/chunks : %d vs %d", len(embeddings), len(chunks))
         return {"product_id": product_id, "chunks_created": 0, "status": "embedding_mismatch"}
 
-    # Suppression des anciens chunks
+    # ── Suppression des anciens chunks ────────────────────────────
     deleted = delete_chunks_for_product(product_id)
     if deleted:
         logger.info("%d anciens chunks supprimés pour %s", deleted, product_id)
 
-    # Insertion des nouveaux chunks
+    # ── Insertion des nouveaux chunks ─────────────────────────────
     created = 0
     for chunk, embedding in zip(chunks, embeddings):
         insert_chunk(
@@ -267,17 +272,18 @@ def ingest_all_from_db(*, force: bool = False) -> list[dict]:
 
     # Grouper par product_id et concaténer les fichiers
     from collections import defaultdict
-    by_product: dict[str, list[str]] = defaultdict(list)
+    by_product: dict[str, list[tuple]] = defaultdict(list)
     for src in sources:
-        by_product[src["product_id"]].append(src["content"])
+        by_product[src["product_id"]].append((src["filename"], src["content"]))
 
-    results = []
-    for product_id, contents in by_product.items():
-        combined_text = "\n\n".join(contents)
+    for product_id, file_contents in by_product.items():
+        # Trier par filename pour garantir un ordre stable
+        file_contents.sort(key=lambda x: x[0])
+        combined_text = "\n\n".join(content for _, content in file_contents)
         result = ingest_product(
             product_id,
             force=force,
-            text_override=combined_text,
+            text_override=combined_text,    
         )
         results.append(result)
 

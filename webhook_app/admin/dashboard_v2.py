@@ -340,7 +340,8 @@ def api_kb_upload():
     """
     Upload un ou plusieurs fichiers de documentation produit.
     Extrait le texte selon le type de fichier,
-    sauvegarde dans KB_DIR et lance l'ingestion.
+    sauvegarde chaque fichier séparément dans kb_sources (DB),
+    puis lance l'ingestion avec le texte combiné.
 
     Form data :
       product_id : str
@@ -356,17 +357,24 @@ def api_kb_upload():
 
     os.makedirs(KB_DIR, exist_ok=True)
 
-    results = []
-    combined_text = ""
+    from webhook_app.database_v21 import save_kb_source, get_kb_sources
 
+    results = []
+
+    # ── Sauvegarder chaque fichier séparément en DB ───────────────
     for file in files:
-        filename = file.filename or ""
+        filename = file.filename or f"{product_id}_source"
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
         try:
             text = _extract_text(file, ext)
             if text:
-                combined_text += f"\n\n<!-- Source: {filename} -->\n\n{text}"
+                # Sauvegarder individuellement — ON CONFLICT écrase l'existant
+                save_kb_source(
+                    product_id=product_id,
+                    filename=filename,
+                    content=text,
+                )
                 results.append({"file": filename, "status": "ok", "chars": len(text)})
             else:
                 results.append({"file": filename, "status": "empty"})
@@ -374,15 +382,33 @@ def api_kb_upload():
             logger.warning("Extraction échouée pour %s : %s", filename, e)
             results.append({"file": filename, "status": "error", "error": str(e)})
 
-    if not combined_text.strip():
+    # Vérifier qu'au moins un fichier a été extrait
+    ok_files = [r for r in results if r["status"] == "ok"]
+    if not ok_files:
         return jsonify({"error": "Aucun texte extrait des fichiers", "files": results}), 400
 
-    # Sauvegarder le texte combiné dans KB_DIR
-    md_path = os.path.join(KB_DIR, f"{product_id}.md")
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(combined_text.strip())
+    # ── Récupérer toutes les sources du produit depuis la DB ──────
+    # (inclut les fichiers précédents + les nouveaux)
+    all_sources = get_kb_sources(product_id)
+    combined_text = "\n\n".join(
+        s["content"]
+        for s in sorted(all_sources, key=lambda x: x["filename"])
+    )
 
-    # Lancer l'ingestion
+    if not combined_text.strip():
+        return jsonify({"error": "Texte combiné vide", "files": results}), 400
+
+    # ── Sauvegarder aussi dans KB_DIR pour la CLI ─────────────────
+    md_path = os.path.join(KB_DIR, f"{product_id}.md")
+    try:
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(combined_text.strip())
+    except Exception as e:
+        logger.warning("Sauvegarde filesystem échouée (non bloquant) : %s", e)
+
+    # ── Lancer l'ingestion avec le texte combiné ──────────────────
+    # text_override = True → ingest_product ne sauvegarde PAS en DB
+    # (déjà fait individuellement ci-dessus)
     try:
         from webhook_app.rag.ingestion import ingest_product
         ingestion_result = ingest_product(
@@ -400,6 +426,7 @@ def api_kb_upload():
     return jsonify({
         "status": "ok",
         "files": results,
+        "sources_count": len(all_sources),
         "ingestion": ingestion_result,
     })
 
@@ -628,6 +655,159 @@ def stream_messages(conv_id: str):
         }
     )
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGES HTML v2.1.1
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/analytics/")
+@login_required
+def analytics():
+    return render_template("dashboard_v2/analytics.html")
+
+
+@dashboard_v2_bp.get("/quick-replies/")
+@login_required
+def quick_replies():
+    return render_template("dashboard_v2/quick_replies.html")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API — QUICK REPLIES
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/api/quick-replies/")
+@login_required
+def api_list_quick_replies():
+    from webhook_app.database_v21 import get_quick_replies
+    category = request.args.get("category")
+    items = get_quick_replies(category)
+    return jsonify({"quick_replies": items, "count": len(items)})
+
+
+@dashboard_v2_bp.post("/api/quick-replies/")
+@login_required
+def api_create_quick_reply():
+    from webhook_app.database_v21 import create_quick_reply
+    body = request.get_json(silent=True) or {}
+    title    = (body.get("title") or "").strip()
+    content  = (body.get("content") or "").strip()
+    category = (body.get("category") or "general").strip()
+    if not title or not content:
+        return jsonify({"error": "title et content requis"}), 400
+    create_quick_reply(title, content, category)
+    return jsonify({"status": "ok"})
+
+
+@dashboard_v2_bp.put("/api/quick-replies/<reply_id>/")
+@login_required
+def api_update_quick_reply(reply_id: str):
+    from webhook_app.database_v21 import update_quick_reply
+    body = request.get_json(silent=True) or {}
+    title    = (body.get("title") or "").strip()
+    content  = (body.get("content") or "").strip()
+    category = (body.get("category") or "general").strip()
+    if not title or not content:
+        return jsonify({"error": "title et content requis"}), 400
+    ok = update_quick_reply(reply_id, title, content, category)
+    return jsonify({"status": "ok" if ok else "not_found"})
+
+
+@dashboard_v2_bp.delete("/api/quick-replies/<reply_id>/")
+@login_required
+def api_delete_quick_reply(reply_id: str):
+    from webhook_app.database_v21 import delete_quick_reply
+    ok = delete_quick_reply(reply_id)
+    return jsonify({"status": "ok" if ok else "not_found"})
+
+
+@dashboard_v2_bp.post("/api/quick-replies/<reply_id>/send/")
+@login_required
+def api_send_quick_reply(reply_id: str):
+    """Envoie une réponse rapide à un client depuis le dashboard."""
+    from webhook_app.database_v21 import get_quick_replies, increment_quick_reply_usage
+    body = request.get_json(silent=True) or {}
+    conv_id = (body.get("conv_id") or "").strip()
+    if not conv_id:
+        return jsonify({"error": "conv_id requis"}), 400
+
+    # Trouver la réponse rapide
+    all_replies = get_quick_replies()
+    reply = next((r for r in all_replies if r["id"] == reply_id), None)
+    if not reply:
+        return jsonify({"error": "Réponse rapide introuvable"}), 404
+
+    # Récupérer la conversation
+    conversation = get_conversation_by_id(conv_id)
+    if not conversation:
+        return jsonify({"error": "Conversation introuvable"}), 404
+
+    phone = conversation.get("phone") or ""
+    message = reply["content"]
+
+    # Envoyer via WhatsApp
+    try:
+        from webhook_app.services.whatsapp import WhatsAppService
+        from webhook_app.database_conv import save_message
+        wa = WhatsAppService()
+        ok = wa.send_message_direct(chatId=phone, message=message, conv_id=conv_id)
+        if not ok:
+            return jsonify({"error": "Envoi WhatsApp échoué"}), 500
+        save_message(conv_id, role="assistant", content=f"[QUICK] {message}",
+                     metadata={"source": "quick_reply", "reply_id": reply_id})
+        increment_quick_reply_usage(reply_id)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"status": "ok", "message": message})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API — FEEDBACK
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.post("/api/messages/<message_id>/feedback/")
+@login_required
+def api_set_feedback(message_id: str):
+    from webhook_app.database_v21 import set_message_feedback
+    body = request.get_json(silent=True) or {}
+    feedback = (body.get("feedback") or "").strip()
+    note     = (body.get("note") or "").strip() or None
+    if feedback not in ("good", "bad"):
+        return jsonify({"error": "feedback doit être 'good' ou 'bad'"}), 400
+    ok = set_message_feedback(message_id, feedback, note)
+    return jsonify({"status": "ok" if ok else "not_found"})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API — ANALYTICS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/api/analytics/")
+@login_required
+def api_analytics():
+    from webhook_app.database_v21 import (
+        get_conversion_stats,
+        get_conversion_by_state,
+        get_hourly_activity,
+        get_volume_by_day,
+        get_top_products_by_conversations,
+        get_feedback_stats,
+        get_escalation_stats,
+    )
+    days = int(request.args.get("days", 30))
+
+    return jsonify({
+        "period_days":       days,
+        "conversion":        get_conversion_stats(days),
+        "by_state":          get_conversion_by_state(days),
+        "hourly_activity":   get_hourly_activity(),
+        "volume_by_day":     get_volume_by_day(days),
+        "top_products":      get_top_products_by_conversations(days),
+        "feedback":          get_feedback_stats(),
+        "escalation_stats":  get_escalation_stats(),
+    })
 
 # ══════════════════════════════════════════════════════════════════════════════
 # UTILITAIRES PRIVÉS

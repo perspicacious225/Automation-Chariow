@@ -898,16 +898,20 @@
       </a>
 
       <div class="nav-section">Analyse</div>
+      <a href="/dashboard/v2/analytics/" class="nav-item {% if request.endpoint == 'dashboard_v2.analytics' %}active{% endif %}">
+        <i class="ti ti-chart-bar"></i>
+        Analytics IA
+      </a>
       <a href="/dashboard/v2/escalations/" class="nav-item {% if request.endpoint == 'dashboard_v2.escalations' %}active{% endif %}">
         <i class="ti ti-alert-triangle"></i>
-        Historique escalades
-      </a>
-      <a href="#" class="nav-item">
-        <i class="ti ti-chart-bar"></i>
-        Statistiques
+        Escalades
       </a>
 
       <div class="nav-section">Configuration</div>
+      <a href="/dashboard/v2/quick-replies/" class="nav-item {% if request.endpoint == 'dashboard_v2.quick_replies' %}active{% endif %}">
+        <i class="ti ti-messages"></i>
+        Réponses rapides
+      </a>
       <a href="/dashboard/v2/blacklist/" class="nav-item {% if request.endpoint == 'dashboard_v2.blacklist' %}active{% endif %}">
         <i class="ti ti-ban"></i>
         Blacklist
