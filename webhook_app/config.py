@@ -98,6 +98,7 @@ class Config:
     MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "20"))
 
     GREEN_API_WEBHOOK_SECRET = os.getenv("GREEN_API_WEBHOOK_SECRET")
+    ADMIN_PHONE = os.getenv("ADMIN_PHONE")
 
 
 # ===== Strategy parameters =====

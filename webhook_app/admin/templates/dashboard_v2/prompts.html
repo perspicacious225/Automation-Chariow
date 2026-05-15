@@ -1,0 +1,348 @@
+{% extends "dashboard_v2/base.html" %}
+
+{% block title %}Prompts système{% endblock %}
+
+{% block topbar %}
+<div class="topbar">
+  <div>
+    <span class="topbar-title">Prompts système</span>
+    <span class="topbar-sub">Gérez le comportement de l'assistant IA</span>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-ghost btn-sm" onclick="loadPrompts()">
+      <i class="ti ti-refresh"></i> Actualiser
+    </button>
+    <button class="btn btn-primary btn-sm" id="btnSaveAll" onclick="saveCurrentPrompt()" disabled>
+      <i class="ti ti-device-floppy"></i> Sauvegarder
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Bandeau avertissement -->
+<div style="background:rgba(239,159,39,0.08);border:0.5px solid rgba(239,159,39,0.3);border-radius:10px;padding:10px 16px;display:flex;align-items:center;gap:10px;margin-bottom:20px;font-size:12px;color:var(--amber);">
+  <i class="ti ti-alert-triangle" style="font-size:16px;flex-shrink:0;"></i>
+  <span>Les modifications sont appliquées en mémoire pour la session courante. La persistance complète en base de données sera disponible en v2.1.</span>
+</div>
+
+<!-- Layout deux colonnes -->
+<div style="display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start;">
+
+  <!-- Colonne gauche — liste des prompts -->
+  <div>
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;padding-left:4px;">
+      Prompts disponibles
+    </div>
+    <div id="promptNav" style="display:flex;flex-direction:column;gap:4px;">
+      <!-- Skeleton -->
+      {% for i in range(6) %}
+      <div class="skeleton" style="height:48px;border-radius:8px;"></div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Colonne droite — éditeur -->
+  <div id="editorPanel">
+    <div style="text-align:center;padding:60px 20px;color:var(--text-muted);">
+      <i class="ti ti-terminal-2" style="font-size:40px;display:block;margin-bottom:12px;"></i>
+      <div style="font-size:13px;margin-bottom:6px;">Sélectionnez un prompt</div>
+      <div style="font-size:12px;">Choisissez un prompt dans la liste pour l'éditer</div>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var allPrompts = {};
+var currentKey = null;
+var hasChanges = false;
+
+/* ── Chargement prompts ─────────────────────────────────────────── */
+async function loadPrompts() {
+  try {
+    var data = await api('GET', '/dashboard/v2/api/prompts/');
+    allPrompts = data.prompts || {};
+    renderNav();
+    if (currentKey && allPrompts[currentKey]) {
+      renderEditor(currentKey);
+    }
+  } catch(e) {
+    showToast('Erreur chargement prompts', 'error');
+  }
+}
+
+/* ── Navigation prompts ─────────────────────────────────────────── */
+var STATE_INFO = {
+  base:              { label:'Prompt de base',       icon:'ti-terminal-2',    desc:'Rôle, ton et règles globales',           color:'var(--blue-light)' },
+  new_prospect:      { label:'Nouveau prospect',     icon:'ti-user-plus',     desc:'Premier contact client',                 color:'var(--blue-light)' },
+  interested_lead:   { label:'Prospect intéressé',   icon:'ti-heart',         desc:'Client qui montre de l\'intérêt',        color:'var(--cyan)' },
+  pre_sale:          { label:'Pre-sale',              icon:'ti-shopping-cart', desc:'En cours d\'achat',                      color:'var(--amber)' },
+  payment_failed:    { label:'Paiement échoué',       icon:'ti-credit-card-off','desc':'Aide à finaliser le paiement',        color:'var(--red)' },
+  payment_abandoned: { label:'Paiement abandonné',    icon:'ti-shopping-cart-off','desc':'Relance douce',                    color:'var(--amber)' },
+  payment_success:   { label:'Achat réussi',          icon:'ti-check',         desc:'Premier contact post-achat',             color:'var(--green)' },
+  post_sale:         { label:'Post-sale',             icon:'ti-star',          desc:'Client après achat',                     color:'var(--green)' },
+  support:           { label:'Support',               icon:'ti-headset',       desc:'Assistance et résolution',               color:'var(--text-secondary)' },
+  escalation:        { label:'Escalade',              icon:'ti-alert-triangle','desc':'Intervention humaine requise',         color:'var(--red)' },
+};
+
+function renderNav() {
+  var keys = Object.keys(allPrompts);
+  document.getElementById('promptNav').innerHTML = keys.map(function(key) {
+    var info = STATE_INFO[key] || { label: key, icon: 'ti-file-text', desc: '', color: 'var(--text-muted)' };
+    var isActive = key === currentKey;
+    return `
+    <div class="prompt-nav-item ${isActive ? 'active' : ''}" onclick="renderEditor('${key}')">
+      <div style="width:30px;height:30px;border-radius:7px;background:${info.color}18;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <i class="ti ${info.icon}" style="font-size:15px;color:${info.color};"></i>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${info.label}</div>
+        <div style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${info.desc}</div>
+      </div>
+      ${key === 'base' ? '<span class="badge badge-blue" style="font-size:9px;flex-shrink:0;">Base</span>' : ''}
+    </div>`;
+  }).join('');
+}
+
+/* ── Éditeur ────────────────────────────────────────────────────── */
+function renderEditor(key) {
+  currentKey = key;
+  hasChanges = false;
+  document.getElementById('btnSaveAll').disabled = true;
+
+  var prompt = allPrompts[key];
+  if (!prompt) return;
+
+  var info = STATE_INFO[key] || { label: key, icon: 'ti-file-text', desc: '', color: 'var(--blue-light)' };
+  var charCount = (prompt.content || '').length;
+  var lineCount = (prompt.content || '').split('\n').length;
+
+  document.getElementById('editorPanel').innerHTML = `
+    <!-- Header éditeur -->
+    <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;">
+      <div style="width:42px;height:42px;border-radius:10px;background:${info.color}18;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <i class="ti ${info.icon}" style="font-size:20px;color:${info.color};"></i>
+      </div>
+      <div style="flex:1;">
+        <div style="font-size:15px;font-weight:700;color:#fff;">${info.label}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">${info.desc}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-ghost btn-sm" onclick="resetPrompt('${key}')">
+          <i class="ti ti-rotate"></i> Réinitialiser
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="copyPrompt()">
+          <i class="ti ti-copy"></i> Copier
+        </button>
+      </div>
+    </div>
+
+    <!-- Tips selon le type -->
+    ${key === 'base' ? `
+    <div style="background:rgba(30,111,217,0.08);border:0.5px solid rgba(30,111,217,0.2);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--blue-light);">
+      <i class="ti ti-info-circle" style="font-size:14px;margin-right:6px;"></i>
+      Ce prompt est injecté dans <strong>toutes les conversations</strong>. Il définit le rôle, le ton et les règles fondamentales de l'assistant.
+    </div>` : `
+    <div style="background:rgba(136,153,170,0.06);border:0.5px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--text-muted);">
+      <i class="ti ti-info-circle" style="font-size:14px;margin-right:6px;"></i>
+      Ce prompt est injecté <strong>uniquement</strong> quand la conversation est à l'état <code style="font-family:var(--font-mono);background:var(--bg-elevated);padding:1px 5px;border-radius:3px;">${key}</code>.
+    </div>`}
+
+    <!-- Tags disponibles -->
+    <div style="margin-bottom:12px;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Variables et tags disponibles</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <span class="tag-pill" onclick="insertTag('[ESCALADE_REQUISE]')">[ESCALADE_REQUISE]</span>
+        <span class="tag-pill" onclick="insertTag('{product_name}')">{product_name}</span>
+        <span class="tag-pill" onclick="insertTag('{customer_first_name}')">{customer_first_name}</span>
+        <span class="tag-pill" onclick="insertTag('{store_name}')">{store_name}</span>
+        <span class="tag-pill" onclick="insertTag('{checkout_url}')">{checkout_url}</span>
+      </div>
+    </div>
+
+    <!-- Éditeur textarea -->
+    <div style="position:relative;">
+      <textarea
+        id="promptEditor"
+        class="form-textarea"
+        style="min-height:340px;font-family:var(--font-mono);font-size:12px;line-height:1.7;tab-size:2;resize:vertical;"
+        oninput="onEditorChange()"
+        onkeydown="handleEditorKeydown(event)"
+        spellcheck="false"
+      >${escapeHtml(prompt.content || '')}</textarea>
+
+      <!-- Compteur -->
+      <div style="position:absolute;bottom:10px;right:12px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);pointer-events:none;">
+        <span id="charCount">${charCount}</span> caractères · <span id="lineCount">${lineCount}</span> lignes
+      </div>
+    </div>
+
+    <!-- Diff preview -->
+    <div id="diffPreview" style="display:none;margin-top:12px;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Modifications en attente</div>
+      <div id="diffContent" style="background:var(--bg-elevated);border:0.5px solid var(--border);border-radius:8px;padding:12px;font-size:11px;font-family:var(--font-mono);line-height:1.6;max-height:120px;overflow-y:auto;color:var(--green);"></div>
+    </div>
+  `;
+
+  // Mettre en évidence l'item actif dans la nav
+  document.querySelectorAll('.prompt-nav-item').forEach(function(el) {
+    el.classList.toggle('active', el.getAttribute('onclick') === "renderEditor('" + key + "')");
+  });
+}
+
+/* ── Changements éditeur ────────────────────────────────────────── */
+function onEditorChange() {
+  var editor = document.getElementById('promptEditor');
+  if (!editor) return;
+  var content = editor.value;
+  var charCount = content.length;
+  var lineCount = content.split('\n').length;
+  document.getElementById('charCount').textContent = charCount;
+  document.getElementById('lineCount').textContent = lineCount;
+  hasChanges = true;
+  document.getElementById('btnSaveAll').disabled = false;
+}
+
+/* ── Raccourcis clavier dans l'éditeur ─────────────────────────── */
+function handleEditorKeydown(e) {
+  // Tab → insérer 2 espaces
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    var ta = e.target;
+    var start = ta.selectionStart;
+    var end = ta.selectionEnd;
+    ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+    ta.selectionStart = ta.selectionEnd = start + 2;
+    onEditorChange();
+  }
+  // Ctrl+S → sauvegarder
+  if (e.ctrlKey && e.key === 's') {
+    e.preventDefault();
+    saveCurrentPrompt();
+  }
+}
+
+/* ── Insérer un tag ─────────────────────────────────────────────── */
+function insertTag(tag) {
+  var ta = document.getElementById('promptEditor');
+  if (!ta) return;
+  var start = ta.selectionStart;
+  var end = ta.selectionEnd;
+  ta.value = ta.value.substring(0, start) + tag + ta.value.substring(end);
+  ta.selectionStart = ta.selectionEnd = start + tag.length;
+  ta.focus();
+  onEditorChange();
+}
+
+/* ── Sauvegarder ────────────────────────────────────────────────── */
+async function saveCurrentPrompt() {
+  if (!currentKey) return;
+  var editor = document.getElementById('promptEditor');
+  if (!editor) return;
+  var content = editor.value.trim();
+  if (!content) { showToast('Le prompt ne peut pas être vide', 'warning'); return; }
+
+  var btn = document.getElementById('btnSaveAll');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader" style="animation:spin .7s linear infinite;"></i> Sauvegarde...';
+
+  try {
+    var res = await api('PUT', '/dashboard/v2/api/prompts/' + currentKey + '/', { content: content });
+    allPrompts[currentKey].content = content;
+    hasChanges = false;
+    btn.innerHTML = '<i class="ti ti-device-floppy"></i> Sauvegarder';
+    showToast('Prompt "' + (STATE_INFO[currentKey]?.label || currentKey) + '" mis à jour', 'success');
+    if (res.warning) showToast(res.warning, 'warning', 5000);
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-device-floppy"></i> Sauvegarder';
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Réinitialiser ──────────────────────────────────────────────── */
+function resetPrompt(key) {
+  if (!allPrompts[key]) return;
+  var editor = document.getElementById('promptEditor');
+  if (!editor) return;
+  if (!confirm('Réinitialiser ce prompt ? Les modifications non sauvegardées seront perdues.')) return;
+  editor.value = allPrompts[key].content || '';
+  hasChanges = false;
+  document.getElementById('btnSaveAll').disabled = true;
+  onEditorChange();
+  showToast('Prompt réinitialisé', 'info');
+}
+
+/* ── Copier ─────────────────────────────────────────────────────── */
+function copyPrompt() {
+  var editor = document.getElementById('promptEditor');
+  if (!editor) return;
+  navigator.clipboard.writeText(editor.value).then(function() {
+    showToast('Prompt copié dans le presse-papiers', 'success');
+  }).catch(function() {
+    showToast('Copie non supportée sur ce navigateur', 'warning');
+  });
+}
+
+/* ── Avertissement si changements non sauvegardés ──────────────── */
+window.addEventListener('beforeunload', function(e) {
+  if (hasChanges) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+/* ── Styles ─────────────────────────────────────────────────────── */
+var style = document.createElement('style');
+style.textContent = `
+  .prompt-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: 0.5px solid transparent;
+  }
+  .prompt-nav-item:hover { background: var(--bg-hover); }
+  .prompt-nav-item.active {
+    background: var(--blue-glow);
+    border-color: rgba(41,171,226,0.2);
+  }
+  .tag-pill {
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    background: var(--bg-elevated);
+    border: 0.5px solid var(--border);
+    color: var(--blue-light);
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .tag-pill:hover { border-color: var(--blue); background: var(--blue-glow); }
+  @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+  #promptEditor:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(30,111,217,0.08); }
+`;
+document.head.appendChild(style);
+
+/* ── Utilitaire ─────────────────────────────────────────────────── */
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+/* ── Init ───────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', loadPrompts);
+</script>
+{% endblock %}

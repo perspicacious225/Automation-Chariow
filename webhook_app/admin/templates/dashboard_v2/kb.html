@@ -1,0 +1,577 @@
+{% extends "dashboard_v2/base.html" %}
+
+{% block title %}Knowledge Base{% endblock %}
+
+{% block topbar %}
+<div class="topbar">
+  <div>
+    <span class="topbar-title">Knowledge Base</span>
+    <span class="topbar-sub" id="kbSubtitle">Chargement...</span>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-ghost btn-sm" onclick="ingestAll()">
+      <i class="ti ti-refresh"></i> Tout réingérer
+    </button>
+    <button class="btn btn-primary btn-sm" onclick="openModal('modalAddProduct')">
+      <i class="ti ti-plus"></i> Nouveau produit
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Stats -->
+<div class="stats-grid" id="kbStats">
+  <div class="stat-card blue skeleton" style="height:72px;"></div>
+  <div class="stat-card green skeleton" style="height:72px;"></div>
+  <div class="stat-card amber skeleton" style="height:72px;"></div>
+  <div class="stat-card cyan skeleton" style="height:72px;"></div>
+</div>
+
+<!-- Barre réingestion globale -->
+<div class="card" style="margin-bottom:20px;padding:14px 16px;display:flex;align-items:center;gap:14px;">
+  <div style="width:38px;height:38px;border-radius:10px;background:rgba(30,111,217,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+    <i class="ti ti-database" style="font-size:20px;color:var(--blue-light);"></i>
+  </div>
+  <div style="flex:1;">
+    <div style="font-size:13px;font-weight:600;color:var(--text-primary);">Réingestion globale</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Relit tous les fichiers sources et met à jour les embeddings Voyage AI</div>
+    <div class="progress-bar" id="globalProgress" style="margin-top:8px;display:none;">
+      <div class="progress-fill" id="globalFill"></div>
+    </div>
+  </div>
+  <button class="btn btn-ghost btn-sm" id="btnIngestAll" onclick="ingestAll()">
+    <i class="ti ti-refresh"></i> Lancer
+  </button>
+</div>
+
+<!-- Grille produits -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+  <div style="font-size:13px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+    <i class="ti ti-package" style="font-size:16px;color:var(--text-muted);"></i>
+    Produits indexés
+  </div>
+  <div class="search-wrap">
+    <i class="ti ti-search"></i>
+    <input class="search-input" id="prodSearch" placeholder="Filtrer les produits..." style="width:180px;" />
+  </div>
+</div>
+
+<div id="productsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-bottom:24px;">
+  {% for i in range(4) %}
+  <div class="skeleton" style="height:150px;border-radius:12px;"></div>
+  {% endfor %}
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MODAL — Nouveau / Éditer produit
+═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modalAddProduct">
+  <div class="modal-box" style="width:560px;">
+    <div class="modal-header">
+      <div class="modal-title" id="modalProductTitle">Nouveau produit</div>
+      <button class="btn-icon" onclick="closeModal('modalAddProduct')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label class="form-label">Nom du produit</label>
+          <input class="form-input" id="prodName" placeholder="Microsoft Office 365..." />
+        </div>
+        <div class="form-group">
+          <label class="form-label">ID Fedapay</label>
+          <input class="form-input" id="prodId" placeholder="prd_k3eyyy" style="font-family:var(--font-mono);" />
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select class="form-select" id="prodType">
+            <option value="logiciel">Logiciel</option>
+            <option value="formation">Formation</option>
+            <option value="ebook">Ebook</option>
+            <option value="coaching">Coaching</option>
+            <option value="template">Template</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Prix (XOF)</label>
+          <input class="form-input" id="prodPrice" placeholder="4900" type="number" />
+        </div>
+      </div>
+
+      <!-- Zone upload multi-fichiers -->
+      <div class="form-group">
+        <label class="form-label">Documents sources <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(plusieurs fichiers acceptés)</span></label>
+        <div class="upload-zone" id="uploadZone"
+          ondragover="event.preventDefault();this.classList.add('drag')"
+          ondragleave="this.classList.remove('drag')"
+          ondrop="handleDrop(event)"
+          onclick="document.getElementById('fileInput').click()">
+          <i class="ti ti-cloud-upload"></i>
+          <div class="upload-zone-text">Glisser-déposer ou cliquer pour choisir</div>
+          <div class="upload-zone-hint">Plusieurs fichiers acceptés — jusqu'à 10 MB par fichier</div>
+          <div class="file-types">
+            <span class="ftype">.md</span>
+            <span class="ftype">.txt</span>
+            <span class="ftype">.pdf</span>
+            <span class="ftype">.docx</span>
+          </div>
+        </div>
+        <input type="file" id="fileInput" style="display:none;" multiple accept=".md,.txt,.pdf,.docx" onchange="handleFiles(this.files)" />
+        <div id="fileList"></div>
+      </div>
+
+      <!-- Progress upload -->
+      <div id="uploadProgressWrap" style="display:none;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;" id="uploadStatus">Ingestion en cours...</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="uploadFill"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalAddProduct')">Annuler</button>
+      <button class="btn btn-primary" id="btnSaveProduct" onclick="saveProduct()">
+        <i class="ti ti-database"></i> Sauvegarder et ingérer
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MODAL — Détail produit (chunks)
+═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modalProductDetail">
+  <div class="modal-box" style="width:600px;">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="detailProductName">—</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;" id="detailProductId">—</div>
+      </div>
+      <button class="btn-icon" onclick="closeModal('modalProductDetail')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs" style="margin-bottom:16px;">
+        <div class="tab active" onclick="switchDetailTab('chunks',this)">Chunks indexés</div>
+        <div class="tab" onclick="switchDetailTab('upload',this)">Mettre à jour</div>
+      </div>
+
+      <!-- Tab chunks -->
+      <div id="detailTabChunks">
+        <div id="chunksList" style="display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto;"></div>
+      </div>
+
+      <!-- Tab upload -->
+      <div id="detailTabUpload" style="display:none;">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
+          Ajoute de nouveaux fichiers pour mettre à jour la KB de ce produit. Les anciens chunks seront remplacés.
+        </div>
+        <div class="upload-zone" id="updateUploadZone"
+          ondragover="event.preventDefault();this.classList.add('drag')"
+          ondragleave="this.classList.remove('drag')"
+          ondrop="handleUpdateDrop(event)"
+          onclick="document.getElementById('updateFileInput').click()">
+          <i class="ti ti-cloud-upload"></i>
+          <div class="upload-zone-text">Glisser ou cliquer pour mettre à jour</div>
+          <div class="file-types">
+            <span class="ftype">.md</span>
+            <span class="ftype">.txt</span>
+            <span class="ftype">.pdf</span>
+            <span class="ftype">.docx</span>
+          </div>
+        </div>
+        <input type="file" id="updateFileInput" style="display:none;" multiple accept=".md,.txt,.pdf,.docx" onchange="handleUpdateFiles(this.files)" />
+        <div id="updateFileList"></div>
+        <div id="updateProgressWrap" style="display:none;margin-top:10px;">
+          <div class="progress-bar"><div class="progress-fill" id="updateFill"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalProductDetail')">Fermer</button>
+      <button class="btn btn-primary btn-sm" id="btnReIngest" onclick="reIngestCurrent()">
+        <i class="ti ti-refresh"></i> Réingérer
+      </button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var selectedFiles = [];
+var updateFiles = [];
+var currentDetailProduct = null;
+
+/* ── Chargement stats KB ────────────────────────────────────────── */
+async function loadKBStats() {
+  try {
+    var data = await api('GET', '/dashboard/v2/api/kb/stats/');
+    renderStats(data);
+    renderProducts(data.products || []);
+    document.getElementById('kbSubtitle').textContent =
+      '— ' + (data.product_count || 0) + ' produits · ' + (data.total_chunks || 0) + ' chunks';
+  } catch(e) {
+    showToast('Erreur chargement KB', 'error');
+  }
+}
+
+/* ── Stats ──────────────────────────────────────────────────────── */
+function renderStats(data) {
+  document.getElementById('kbStats').innerHTML = `
+    <div class="stat-card blue">
+      <div class="stat-label">Produits indexés</div>
+      <div class="stat-value">${data.product_count || 0}</div>
+      <div class="stat-hint">Sur ~20 prévus</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Chunks totaux</div>
+      <div class="stat-value">${data.total_chunks || 0}</div>
+      <div class="stat-hint">Passages vectorisés</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-label">Fichiers disponibles</div>
+      <div class="stat-value">${(data.available_files || []).length}</div>
+      <div class="stat-hint">Dans knowledge_base/</div>
+    </div>
+    <div class="stat-card cyan">
+      <div class="stat-label">Modèle embedding</div>
+      <div class="stat-value" style="font-size:13px;">voyage-4-lite</div>
+      <div class="stat-hint">1024 dimensions</div>
+    </div>
+  `;
+}
+
+/* ── Grille produits ────────────────────────────────────────────── */
+var PROD_TYPE_ICONS = {
+  logiciel: 'ti-device-laptop',
+  formation: 'ti-school',
+  ebook: 'ti-book',
+  coaching: 'ti-messages',
+  template: 'ti-template',
+};
+
+function renderProducts(products) {
+  var search = (document.getElementById('prodSearch').value || '').toLowerCase();
+  var filtered = search
+    ? products.filter(function(p) { return (p.product_id||'').toLowerCase().includes(search); })
+    : products;
+
+  var cards = filtered.map(function(p) {
+    var chunks = p.chunk_count || 0;
+    var maxChunks = 20;
+    var pct = Math.min(100, Math.round(chunks / maxChunks * 100));
+    var lastDate = p.last_ingested ? new Date(p.last_ingested).toLocaleDateString('fr-FR') : '—';
+    var icon = PROD_TYPE_ICONS['logiciel'];
+
+    return `
+    <div class="prod-card" onclick="openProductDetail('${p.product_id}')">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
+        <div style="width:36px;height:36px;border-radius:9px;background:rgba(30,111,217,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <i class="ti ${icon}" style="font-size:18px;color:var(--blue-light);"></i>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div class="prod-name">${escapeHtml(p.product_id)}</div>
+          <div class="prod-meta">${chunks} chunks · ${lastDate}</div>
+        </div>
+      </div>
+      <div style="height:3px;background:var(--border);border-radius:2px;margin-bottom:10px;">
+        <div style="height:3px;width:${pct}%;background:linear-gradient(90deg,var(--blue),var(--blue-light));border-radius:2px;transition:width .6s ease;"></div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span class="badge badge-green" style="font-size:10px;">Actif</span>
+        <div style="display:flex;gap:4px;">
+          <button class="btn-icon" title="Réingérer" onclick="event.stopPropagation();quickIngest('${p.product_id}',this)">
+            <i class="ti ti-refresh" style="font-size:14px;"></i>
+          </button>
+          <button class="btn-icon" title="Voir les chunks" onclick="event.stopPropagation();openProductDetail('${p.product_id}')">
+            <i class="ti ti-eye" style="font-size:14px;"></i>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Carte "Ajouter"
+  var addCard = `
+    <div class="prod-card add-card" onclick="openModal('modalAddProduct')">
+      <i class="ti ti-plus" style="font-size:28px;color:var(--border);display:block;margin-bottom:8px;transition:color .2s;"></i>
+      <span style="font-size:12px;color:var(--text-muted);">Ajouter un produit</span>
+    </div>`;
+
+  document.getElementById('productsGrid').innerHTML = cards + addCard;
+}
+
+/* ── Réingestion rapide ─────────────────────────────────────────── */
+async function quickIngest(productId, btn) {
+  var icon = btn.querySelector('i');
+  icon.style.animation = 'spin .7s linear infinite';
+  if (!document.getElementById('spinKB')) {
+    var s = document.createElement('style');
+    s.id = 'spinKB';
+    s.textContent = '@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}';
+    document.head.appendChild(s);
+  }
+  try {
+    var res = await api('POST', '/dashboard/v2/api/kb/ingest/', { product_id: productId });
+    icon.style.animation = '';
+    showToast(productId + ' — ' + res.chunks_created + ' chunks mis à jour', 'success');
+    loadKBStats();
+  } catch(e) {
+    icon.style.animation = '';
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Réingestion globale ────────────────────────────────────────── */
+async function ingestAll() {
+  var prog = document.getElementById('globalProgress');
+  var fill = document.getElementById('globalFill');
+  var btn  = document.getElementById('btnIngestAll');
+  prog.style.display = 'block';
+  btn.disabled = true;
+  fill.style.width = '0%';
+
+  var fakeW = 0;
+  var iv = setInterval(function() {
+    fakeW = Math.min(fakeW + Math.random() * 8 + 3, 85);
+    fill.style.width = Math.round(fakeW) + '%';
+  }, 200);
+
+  try {
+    var res = await api('POST', '/dashboard/v2/api/kb/ingest-all/');
+    clearInterval(iv);
+    fill.style.width = '100%';
+    setTimeout(function() {
+      prog.style.display = 'none';
+      fill.style.width = '0%';
+      btn.disabled = false;
+      showToast(res.products_ingested + ' produits réingérés — ' + res.total_chunks_created + ' chunks', 'success');
+      loadKBStats();
+    }, 500);
+  } catch(e) {
+    clearInterval(iv);
+    prog.style.display = 'none';
+    btn.disabled = false;
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Upload multi-fichiers ──────────────────────────────────────── */
+function handleFiles(files) {
+  for (var i = 0; i < files.length; i++) {
+    addFile(files[i]);
+  }
+  renderFileList('fileList', selectedFiles, removeFile);
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('uploadZone').classList.remove('drag');
+  handleFiles(e.dataTransfer.files);
+}
+
+function addFile(file) {
+  if (!selectedFiles.find(function(f) { return f.name === file.name; })) {
+    selectedFiles.push(file);
+  }
+}
+
+function removeFile(index) {
+  selectedFiles.splice(index, 1);
+  renderFileList('fileList', selectedFiles, removeFile);
+}
+
+function renderFileList(containerId, files, removeFn) {
+  var ext2icon = { pdf:'ti-file-type-pdf', docx:'ti-file-word', md:'ti-markdown', txt:'ti-file-text' };
+  document.getElementById(containerId).innerHTML = files.map(function(f, i) {
+    var ext = f.name.split('.').pop().toLowerCase();
+    var icon = ext2icon[ext] || 'ti-file';
+    var size = f.size < 1024*1024 ? Math.round(f.size/1024) + ' KB' : (f.size/1024/1024).toFixed(1) + ' MB';
+    return `
+    <div class="file-item">
+      <i class="ti ${icon}"></i>
+      <span class="file-item-name">${escapeHtml(f.name)}</span>
+      <span class="file-item-size">${size}</span>
+      <button class="file-item-remove" onclick="(${removeFn.name})(${i})"><i class="ti ti-x"></i></button>
+    </div>`;
+  }).join('');
+}
+
+/* ── Sauvegarde produit ─────────────────────────────────────────── */
+async function saveProduct() {
+  var productId = document.getElementById('prodId').value.trim();
+  var productName = document.getElementById('prodName').value.trim();
+
+  if (!productId) { showToast('L\'ID Fedapay est requis', 'warning'); return; }
+  if (!selectedFiles.length) { showToast('Ajoutez au moins un fichier', 'warning'); return; }
+
+  var wrap = document.getElementById('uploadProgressWrap');
+  var fill = document.getElementById('uploadFill');
+  var status = document.getElementById('uploadStatus');
+  var btn = document.getElementById('btnSaveProduct');
+
+  wrap.style.display = 'block';
+  btn.disabled = true;
+  fill.style.width = '0%';
+
+  var fakeW = 0;
+  var iv = setInterval(function() {
+    fakeW = Math.min(fakeW + Math.random() * 12 + 5, 80);
+    fill.style.width = Math.round(fakeW) + '%';
+  }, 150);
+
+  try {
+    var formData = new FormData();
+    formData.append('product_id', productId);
+    if (productName) formData.append('product_name', productName);
+    selectedFiles.forEach(function(f) { formData.append('files[]', f); });
+
+    var res = await fetch('/dashboard/v2/api/kb/upload/', { method: 'POST', body: formData });
+    var json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Erreur serveur');
+
+    clearInterval(iv);
+    fill.style.width = '100%';
+    status.textContent = 'Terminé — ' + json.ingestion.chunks_created + ' chunks créés';
+
+    setTimeout(function() {
+      wrap.style.display = 'none';
+      fill.style.width = '0%';
+      btn.disabled = false;
+      selectedFiles = [];
+      document.getElementById('fileList').innerHTML = '';
+      document.getElementById('prodId').value = '';
+      document.getElementById('prodName').value = '';
+      closeModal('modalAddProduct');
+      showToast(productId + ' — ' + json.ingestion.chunks_created + ' chunks ingérés', 'success');
+      loadKBStats();
+    }, 800);
+
+  } catch(e) {
+    clearInterval(iv);
+    wrap.style.display = 'none';
+    btn.disabled = false;
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Détail produit ─────────────────────────────────────────────── */
+async function openProductDetail(productId) {
+  currentDetailProduct = productId;
+  document.getElementById('detailProductName').textContent = productId;
+  document.getElementById('detailProductId').textContent = 'Chargement...';
+  document.getElementById('chunksList').innerHTML =
+    Array(3).fill('<div class="skeleton" style="height:50px;border-radius:8px;"></div>').join('');
+  openModal('modalProductDetail');
+
+  try {
+    var data = await api('GET', '/dashboard/v2/api/kb/stats/');
+    var prod = (data.products || []).find(function(p) { return p.product_id === productId; });
+    if (prod) {
+      document.getElementById('detailProductId').textContent =
+        (prod.chunk_count || 0) + ' chunks · Dernière ingestion : ' +
+        (prod.last_ingested ? new Date(prod.last_ingested).toLocaleString('fr-FR') : '—');
+    }
+    renderChunks(prod ? prod.chunk_count : 0);
+  } catch(e) {
+    showToast('Erreur chargement détail', 'error');
+  }
+}
+
+function renderChunks(count) {
+  if (!count) {
+    document.getElementById('chunksList').innerHTML =
+      '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:12px;">Aucun chunk indexé</div>';
+    return;
+  }
+  var sections = ['presentation','promesse','contenu','acces','support','faq','objections','escalade','commercial','general'];
+  var items = [];
+  for (var i = 0; i < Math.min(count, sections.length); i++) {
+    items.push(`
+    <div style="background:var(--bg-elevated);border:0.5px solid var(--border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;">
+      <span class="badge badge-blue" style="flex-shrink:0;font-family:var(--font-mono);font-size:10px;">${sections[i]}</span>
+      <div class="skeleton" style="flex:1;height:12px;border-radius:4px;"></div>
+      <span style="font-size:10px;color:var(--text-muted);">Chunk ${i+1}</span>
+    </div>`);
+  }
+  if (count > sections.length) {
+    items.push(`<div style="text-align:center;font-size:11px;color:var(--text-muted);padding:8px;">+ ${count - sections.length} autres chunks</div>`);
+  }
+  document.getElementById('chunksList').innerHTML = items.join('');
+}
+
+async function reIngestCurrent() {
+  if (!currentDetailProduct) return;
+  try {
+    var res = await api('POST', '/dashboard/v2/api/kb/ingest/', { product_id: currentDetailProduct });
+    showToast(currentDetailProduct + ' — ' + res.chunks_created + ' chunks', 'success');
+    openProductDetail(currentDetailProduct);
+    loadKBStats();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Update files dans le modal détail ─────────────────────────── */
+function handleUpdateFiles(files) {
+  updateFiles = Array.from(files);
+  renderFileList('updateFileList', updateFiles, function(i) {
+    updateFiles.splice(i, 1);
+    renderFileList('updateFileList', updateFiles, arguments.callee);
+  });
+}
+
+function handleUpdateDrop(e) {
+  e.preventDefault();
+  document.getElementById('updateUploadZone').classList.remove('drag');
+  handleUpdateFiles(e.dataTransfer.files);
+}
+
+/* ── Tabs modal détail ──────────────────────────────────────────── */
+function switchDetailTab(tab, el) {
+  document.querySelectorAll('#modalProductDetail .tab').forEach(function(t) { t.classList.remove('active'); });
+  el.classList.add('active');
+  document.getElementById('detailTabChunks').style.display = tab === 'chunks' ? 'block' : 'none';
+  document.getElementById('detailTabUpload').style.display = tab === 'upload' ? 'block' : 'none';
+  document.getElementById('btnReIngest').style.display = tab === 'chunks' ? 'inline-flex' : 'none';
+}
+
+/* ── Recherche produits ─────────────────────────────────────────── */
+document.getElementById('prodSearch').addEventListener('input', function() {
+  loadKBStats();
+});
+
+/* ── Styles inline ──────────────────────────────────────────────── */
+var style = document.createElement('style');
+style.textContent = `
+  .prod-card {
+    background: var(--bg-elevated);
+    border: 0.5px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .prod-card:hover { border-color: var(--blue); transform: translateY(-2px); box-shadow: 0 4px 20px rgba(30,111,217,0.1); }
+  .prod-card.add-card { border-style: dashed; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 150px; gap: 8px; }
+  .prod-card.add-card:hover i { color: var(--blue); }
+  .prod-name { font-size: 12px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prod-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+`;
+document.head.appendChild(style);
+
+/* ── Utilitaire ─────────────────────────────────────────────────── */
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Init ───────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', loadKBStats);
+</script>
+{% endblock %}

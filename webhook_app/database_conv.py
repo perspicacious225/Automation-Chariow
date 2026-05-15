@@ -541,6 +541,45 @@ def get_or_set_lid(conv_id: str, phone_raw: str, resolver_fn) -> str:
     return lid or phone_raw
 
 
+
+def list_conversations_with_last_message(
+    state: str | None = None,
+    ai_active: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """
+    Liste les conversations avec le dernier message inclus —
+    une seule requête SQL avec LEFT JOIN au lieu de N+1 requêtes.
+    """
+    sql = """
+        SELECT
+            c.*,
+            m.content   AS last_message,
+            m.role      AS last_message_role,
+            m.timestamp AS last_message_time
+        FROM conversations c
+        LEFT JOIN LATERAL (
+            SELECT content, role, timestamp
+            FROM messages
+            WHERE conversation_id = c.id
+            ORDER BY timestamp DESC
+            LIMIT 1
+        ) m ON TRUE
+        WHERE TRUE
+    """
+    params = []
+    if state:
+        sql += " AND c.state = %s"; params.append(state)
+    if ai_active is not None:
+        sql += " AND c.ai_active = %s"; params.append(ai_active)
+    sql += " ORDER BY COALESCE(m.timestamp, c.updated_at) DESC LIMIT %s OFFSET %s"
+    params += [limit, offset]
+
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(conn, sql, params, fetch="all") or []
+        return [dict(r) for r in rows]
+
 # ══════════════════════════════════════════════════════════════════════════════
 # INIT — point d'entrée appelé au démarrage de l'app
 # ══════════════════════════════════════════════════════════════════════════════

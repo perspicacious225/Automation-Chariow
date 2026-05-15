@@ -2,32 +2,165 @@
 {% block title %}Dashboard KPI — Relances & Ventes{% endblock %}
 
 {% block content %}
-  <h1>Dashboard KPI — Relances & Ventes</h1>
-  <a class="btn secondary" href="{{ url_for('dashboard.templates_products') }}">+ Ajouter un template</a>
-  <a class="logout" href="{{ url_for('auth.logout') }}">Logout</a>
-  <div class="grid" id="kpis"></div>
 
-  <div class="card">
-    <div class="muted">Conversions par step (7j)</div>
-    <div id="steps"></div>
-  </div>
-
-  <div class="grid">
-    <div class="card">
-      <div class="muted">Top produits (7j)</div>
-      <table id="topprod"></table>
-    </div>
-    <div class="card">
-      <div class="muted">Pays (7j)</div>
-      <table id="countries"></table>
-    </div>
-    <div class="card">
-      <div class="muted">Segments RFM</div>
-      <table id="rfm"></table>
+<!-- Header page -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+  <div>
+    <h1 style="font-size:20px;font-weight:700;color:#fff;letter-spacing:-0.01em;">
+      Vue d'ensemble
+    </h1>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
+      Relances, ventes et performances — 7 derniers jours
     </div>
   </div>
+  <div style="display:flex;gap:8px;">
+    <button class="btn-ghost" onclick="loadDashboard()">
+      <i class="ti ti-refresh"></i> Actualiser
+    </button>
+    <a href="/dashboard/templates-products/" class="btn-v2" style="background:var(--bg-elevated);border:0.5px solid var(--border);color:var(--text-secondary);">
+      <i class="ti ti-template"></i> Templates
+    </a>
+  </div>
+</div>
+
+<!-- Skeleton initial -->
+<div id="kpis" class="grid" style="margin-bottom:20px;">
+  {% for i in range(8) %}
+  <div style="height:72px;background:var(--bg-elevated);border:0.5px solid var(--border);border-radius:var(--radius-lg);
+              background:linear-gradient(90deg,var(--bg-elevated) 25%,var(--bg-hover) 50%,var(--bg-elevated) 75%);
+              background-size:200% 100%;animation:shimmer 1.4s infinite;"></div>
+  {% endfor %}
+</div>
+
+<!-- Conversions par step -->
+<div style="margin-bottom:20px;">
+  <div class="section-title">
+    <i class="ti ti-route"></i>
+    Conversions par étape — 7 jours
+  </div>
+  <div class="card" style="padding:14px 16px;">
+    <div id="steps" style="display:flex;flex-wrap:wrap;gap:6px;min-height:32px;">
+      <div style="color:var(--text-muted);font-size:12px;">Chargement...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Grilles analytiques -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:20px;">
+
+  <!-- Top produits -->
+  <div>
+    <div class="section-title">
+      <i class="ti ti-package"></i>
+      Top produits — 7 jours
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table id="topprod">
+        <thead><tr><th>Produit</th><th>Cmds</th><th>GMV</th></tr></thead>
+        <tbody><tr><td colspan="3" class="muted" style="padding:16px;text-align:center;">Chargement...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pays -->
+  <div>
+    <div class="section-title">
+      <i class="ti ti-world"></i>
+      Répartition pays — 7 jours
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table id="countries">
+        <thead><tr><th>Pays</th><th>Cmds</th><th>GMV</th></tr></thead>
+        <tbody><tr><td colspan="3" class="muted" style="padding:16px;text-align:center;">Chargement...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- RFM -->
+  <div>
+    <div class="section-title">
+      <i class="ti ti-users"></i>
+      Segments RFM clients
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table id="rfm">
+        <thead><tr><th>Segment</th><th>Clients</th><th>GMV</th></tr></thead>
+        <tbody><tr><td colspan="3" class="muted" style="padding:16px;text-align:center;">Chargement...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<style>
+  @keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+</style>
+
 {% endblock %}
 
 {% block scripts %}
-  <script defer src="{{ url_for('dashboard.static', filename='dashboard.js') }}"></script>
+<script defer src="{{ url_for('dashboard.static', filename='dashboard.js') }}"></script>
+<script>
+// Réécriture du rendu pour utiliser les nouveaux composants
+window.renderDashboard = function(m) {
+  const fmt = (n) => (n||0).toLocaleString('fr-FR', {maximumFractionDigits:0});
+  const pct = (x) => ((x||0)*100).toFixed(1) + '%';
+
+  const kpiData = [
+    { label:'GMV aujourd\'hui',       value: fmt(m.gmv_1d),              accent:'blue',  icon:'ti-trending-up' },
+    { label:'GMV hier',               value: fmt(m.gmv_yday),             accent:'blue',  icon:'ti-calendar' },
+    { label:'Commandes 1j',           value: m.orders_1d||0,              accent:'green', icon:'ti-shopping-cart' },
+    { label:'GMV 7 jours',            value: fmt(m.gmv_7d),               accent:'cyan',  icon:'ti-chart-line' },
+    { label:'Commandes 7j',           value: m.orders_7d||0,              accent:'green', icon:'ti-package' },
+    { label:'Panier moyen 7j',        value: fmt(m.aov_7d),               accent:'blue',  icon:'ti-coin' },
+    { label:'GMV récupéré 7j',        value: fmt(m.recovered_gmv_7d),     accent:'green', icon:'ti-refresh' },
+    { label:'Cmds récupérées 7j',     value: m.recovered_orders_7d||0,    accent:'green', icon:'ti-check' },
+    { label:'Taux récupération 7j',   value: m.ab_failed_7d ? pct(m.recovered_rate_7d) : 'n/a', accent:'cyan', icon:'ti-percent' },
+    { label:'Abandons aujourd\'hui',  value: m.abandoned_24h||0,          accent:'amber', icon:'ti-shopping-cart-off' },
+    { label:'Échecs aujourd\'hui',    value: m.failed_24h||0,             accent:'red',   icon:'ti-x' },
+    { label:'Relances échues',        value: m.sent_due||0,               accent:'blue',  icon:'ti-send' },
+    { label:'Relances planifiées',    value: m.pending_future||0,         accent:'blue',  icon:'ti-clock' },
+    { label:'Clients en relance',     value: m.relance_customer_pending_count||0, accent:'amber', icon:'ti-users' },
+    { label:'Emails 24h',             value: m.sent_24h_email||0,         accent:'blue',  icon:'ti-mail' },
+    { label:'WhatsApp 24h',           value: m.sent_24h_whatsapp||0,      accent:'green', icon:'ti-brand-whatsapp' },
+    { label:'Erreurs 24h',            value: m.errors_24h||0,             accent:'red',   icon:'ti-alert-triangle', ko: (m.errors_24h||0) > 0 },
+  ];
+
+  document.getElementById('kpis').innerHTML = kpiData.map(k => `
+    <div class="kpi-card ${k.accent}">
+      <div class="kpi-label">
+        <i class="ti ${k.icon}" style="font-size:12px;margin-right:4px;"></i>
+        ${k.label}
+      </div>
+      <div class="kpi-value ${k.ko ? 'ko' : ''}">${k.value}</div>
+    </div>
+  `).join('');
+
+  // Steps
+  const steps = document.getElementById('steps');
+  const stepsData = m.conversions_by_step_7d || [];
+  steps.innerHTML = stepsData.length
+    ? stepsData.map(r => `<span class="pill">${r.step}: <strong>${r.conv}</strong> (${fmt(r.gmv)} XOF)</span>`).join('')
+    : '<div class="muted">Aucune donnée disponible</div>';
+
+  // Tables
+  function renderTable(id, rows, cols) {
+    const t = document.getElementById(id);
+    if (!rows || !rows.length) {
+      t.querySelector('tbody').innerHTML = '<tr><td colspan="' + cols.length + '" class="muted" style="padding:14px;text-align:center;">Aucune donnée</td></tr>';
+      return;
+    }
+    t.querySelector('tbody').innerHTML = rows.map(r =>
+      '<tr>' + cols.map(c => `<td>${r[c[0]] !== undefined ? (c[2] ? fmt(r[c[0]]) : r[c[0]]) : '—'}</td>`).join('') + '</tr>'
+    ).join('');
+  }
+
+  renderTable('topprod',   m.top_products_7d, [['product_id','Produit',false],['orders','Cmds',false],['gmv','GMV',true]]);
+  renderTable('countries', m.countries_7d,    [['country','Pays',false],['orders','Cmds',false],['gmv','GMV',true]]);
+  renderTable('rfm',       m.rfm_segments,    [['segment','Segment',false],['customers','Clients',false],['gmv','GMV',true]]);
+};
+</script>
 {% endblock %}

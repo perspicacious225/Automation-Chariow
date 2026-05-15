@@ -26,12 +26,21 @@ from webhook_app.services.whatsapp_inbound import inbound_bp
 from webhook_app.conversation.manager import ConversationManager
 from webhook_app.services.whatsapp import WhatsAppService
 
+from webhook_app.admin.dashboard_v2 import dashboard_v2_bp
+
+
+
 def create_app():
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
     logger = logging.getLogger(__name__)
 
     app = Flask(__name__)
+    @app.after_request
+    def add_headers(response):
+        response.headers["ngrok-skip-browser-warning"] = "true"
+        return response
+
     CORS(app, resources={r"/webhook": {"origins": "*"}})
     app.config.from_object(Config)
     assert app.config.get("SECRET_KEY"), "SECRET_KEY requis pour les sessions !"
@@ -275,7 +284,9 @@ def create_app():
         # ──────────────────────────────────────────────────────────────────────
 
     app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
+    app.register_blueprint(dashboard_v2_bp)
     app.register_blueprint(inbound_bp)
+
     return app
 
 

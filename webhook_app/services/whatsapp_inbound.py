@@ -28,61 +28,45 @@ inbound_bp = Blueprint("whatsapp_inbound", __name__)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _extract_message(payload: dict) -> dict | None:
-    """
-    Extrait les champs utiles d'un payload Green API.
-
-    Green API envoie différents types de notifications :
-      - typeWebhook: "incomingMessageReceived" → message texte entrant
-      - typeWebhook: "outgoingMessageStatus"   → statut message sortant (ignorer)
-      - typeWebhook: "stateInstanceChanged"    → changement état instance (ignorer)
-
-    Retourne un dict normalisé ou None si le payload n'est pas un message texte.
-    """
     webhook_type = payload.get("typeWebhook")
 
-    if webhook_type != "incomingMessageReceived":
+    # Accepter les messages entrants ET sortants depuis le téléphone instance
+    if webhook_type not in ("incomingMessageReceived", "outgoingMessageReceived"):
         logger.debug("Webhook ignoré — type : %s", webhook_type)
         return None
-
     sender_data = payload.get("senderData") or {}
     message_data = payload.get("messageData") or {}
     text_message = message_data.get("textMessageData") or {}
 
     chat_id = sender_data.get("chatId") or ""
-    sender = sender_data.get("sender") or chat_id
+    sender  = sender_data.get("sender") or chat_id
 
-    # AJOUTER CETTE LIGNE
-    logger.info("DEBUG chatId=%s | sender=%s", chat_id, sender)
+    logger.info("DEBUG chatId=%s | sender=%s | type=%s", chat_id, sender, webhook_type)
 
-    # Ignorer les messages de groupe (@g.us)
+    # Ignorer les messages de groupe
     if "@g.us" in chat_id:
-        logger.debug("Message de groupe ignoré : %s", chat_id)
-        
         return None
 
-    # Extraire le numéro propre (sans @c.us)
     phone_raw = chat_id.replace("@c.us", "").strip()
-
-    # ID unique du message Green API
     id_message = payload.get("idMessage") or ""
-
-    # Contenu texte
     text = text_message.get("textMessage") or ""
 
-    # Ignorer les messages vides ou non-texte
     if not text.strip():
-        logger.debug("Message non-texte ou vide ignoré (idMessage: %s)", id_message)
-        
         return None
+
+    # Pour outgoing : is_outgoing=True — utilisé pour détecter les commandes admin
+    is_outgoing = webhook_type == "outgoingMessageReceived"
 
     return {
         "phone_raw": phone_raw,
-        "phone": chat_id,  # ← chatId COMPLET avec @c.us — bypass normalisation
-        "sender": sender,
+        "phone":     chat_id,      # chatId = numéro du client
+        "sender":    sender,       # sender = qui a envoyé
         "wa_message_id": id_message,
-        "text": text.strip(),
+        "text":      text.strip(),
         "timestamp": payload.get("timestamp"),
+        "is_outgoing": is_outgoing,
     }
+
 
 
 
@@ -115,17 +99,142 @@ def _verify_signature(request_obj) -> bool:
     return hmac.compare_digest(signature, expected)
 
 
+
+# Tags reconnus — envoyés par l'admin dans la discussion client
+ADMIN_TAGS = {
+    "#REPRISE": {"ai_active": True,  "state": None},
+    "#PAUSE":   {"ai_active": False, "state": None},
+    "#RESOLU":  {"ai_active": True,  "state": "post_sale"},
+}
+
+
+def _parse_admin_command(text: str) -> tuple[str, str | None]:
+    """
+    Parse le tag et le numéro client optionnel.
+    Retourne (tag, phone_client) ou (tag, None)
+    """
+    parts = text.strip().split()
+    tag = parts[0].upper()
+    phone = parts[1] if len(parts) > 1 else None
+    if phone and not phone.endswith("@c.us"):
+        phone = phone + "@c.us"
+    return tag, phone
+
+def _is_admin_command(sender: str, text: str) -> bool:
+    """
+    Vérifie STRICTEMENT que :
+    1. Le sender correspond exactement à ADMIN_PHONE
+    2. Le texte est un tag reconnu dans ADMIN_TAGS
+    """
+    admin_phone = Config.ADMIN_PHONE or ""
+    if not admin_phone:
+        return False
+
+    sender_digits = sender.replace("@c.us", "").strip().lstrip("+")
+    admin_digits  = admin_phone.replace("+", "").replace(" ", "").strip()
+
+    is_admin = sender_digits == admin_digits
+    is_tag   = text.strip().upper() in ADMIN_TAGS
+
+    if is_tag and not is_admin:
+        logger.warning(
+            "Tag admin rejeté — sender %s non autorisé (ADMIN_PHONE=%s)",
+            sender, admin_phone
+        )
+
+    return bool(is_admin and is_tag)
+
+def send_to_admin(self, message: str, conv_id: str | None = None) -> bool:
+    admin_phone = Config.ADMIN_PHONE
+    if not admin_phone:
+        logger.warning("ADMIN_PHONE non configuré — notification admin ignorée")
+        return False
+
+    # Utiliser send_message_direct avec le conv_id admin
+    # pour bénéficier du cache LID
+    chat_id = f"{admin_phone}@c.us"
+    return self.send_message_direct(chatId=chat_id, message=message)
+
+def _handle_admin_command(
+    phone: str,
+    text: str,
+    wa_message_id: str,
+    chat_id: str,
+) -> None:
+    """
+    Traite une commande admin (#REPRISE, #PAUSE, #RESOLU).
+
+    1. Identifie la conversation cible depuis le phone
+    2. Applique la commande
+    3. Supprime le message tag (invisible pour le client)
+    4. Confirme à l'admin
+    """
+    from webhook_app.database_conv import (
+        get_conversation_by_phone,
+        toggle_ai,
+        update_conversation_state,
+    )
+    from webhook_app.services.whatsapp import WhatsAppService
+    
+    tag = text.strip().upper()
+    action = ADMIN_TAGS.get(tag)
+    if not action:
+        return
+
+    # La commande est envoyée DANS la discussion du client
+    # donc phone = numéro du client (le chat où l'admin a écrit)
+    # Mais en réalité le webhook reçoit phone = numéro admin
+    # Il faut donc récupérer la conversation par un autre moyen
+    # → L'admin envoie le tag dans la discussion avec le client
+    # → Green API nous donne le chatId de la discussion = numéro client
+    # → On cherche la conversation par ce numéro
+
+    # Note : phone ici = numéro de l'expéditeur (admin)
+    # Le chatId de la discussion = numéro du client
+    # On le récupère depuis le payload via senderData.chatId
+    # qui est déjà dans message["phone"] quand c'est une discussion 1:1
+
+    wa = WhatsAppService()
+
+    # Supprimer le message tag immédiatement
+    wa.delete_message(chat_id, wa_message_id)
+
+    # Trouver la conversation liée à ce numéro
+    # Si l'admin écrit dans la discussion d'un client,
+    # le chatId = numéro du client
+    conv = get_conversation_by_phone(phone)
+    if not conv:
+        logger.warning("Commande admin : aucune conversation pour %s", phone)
+        wa.send_to_admin(f"⚠️ Aucune conversation trouvée pour {phone}")
+        return
+
+    conv_id = str(conv["id"])
+
+    # Appliquer l'action
+    toggle_ai(conv_id, action["ai_active"])
+    if action["state"]:
+        update_conversation_state(conv_id, action["state"])
+
+    # Confirmation à l'admin
+    labels = {
+        "#REPRISE": "✅ IA réactivée — le bot reprend la conversation",
+        "#PAUSE":   "⏸ IA désactivée — vous êtes en main",
+        "#RESOLU":  "✅ Résolu — IA réactivée, état → post_sale",
+    }
+    wa.send_to_admin(labels.get(tag, "Commande appliquée"), conv_id=conv_id)
+    logger.info("Commande admin %s appliquée sur conv=%s", tag, conv_id)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ENDPOINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 @inbound_bp.route("/webhook/whatsapp/inbound", methods=["POST"])
 def whatsapp_inbound():
-    """
-    Reçoit les webhooks Green API pour les messages entrants.
-    Répond immédiatement 200 OK à Green API, puis traite en synchrone.
-    """
-    # Vérification signature
+
+    raw = request.get_json(silent=True) or {}
+    logger.info("=== INBOUND BRUT === %s", raw)
+
     if not _verify_signature(request):
         logger.warning("Signature webhook invalide — requête rejetée.")
         return jsonify({"status": "unauthorized"}), 401
@@ -137,21 +246,56 @@ def whatsapp_inbound():
 
     logger.debug("Webhook inbound reçu : typeWebhook=%s", payload.get("typeWebhook"))
 
-    # Extraction et normalisation du message
     message = _extract_message(payload)
-    logger.info("Payload inbound complet : %s", payload)
     if not message:
-        # Pas un message texte entrant — on acquitte sans traiter
         return jsonify({"status": "ignored", "reason": "not_text_message"}), 200
 
     logger.info(
-        "Message entrant — phone=%s | wa_id=%s | texte=%s",
+        "Message — phone=%s | wa_id=%s | texte=%s | outgoing=%s",
         message["phone"],
         message["wa_message_id"],
         message["text"][:80],
+        message.get("is_outgoing", False),
     )
 
-    # Traitement par le ConversationManager
+    # ── Détecter commande admin ──────────────────────────────────
+    is_admin_cmd = (
+        message.get("is_outgoing")
+        and message["text"].strip().upper().startswith("#")
+    ) or _is_admin_command(message["sender"], message["text"])
+
+    is_admin_cmd = (
+    # Cas 1 : message sortant depuis le téléphone de l'instance (toujours admin)
+    message.get("is_outgoing")
+    and message["text"].strip().upper().startswith("#")
+    and message["text"].strip().upper() in ADMIN_TAGS
+    ) or (
+        # Cas 2 : message entrant MAIS sender = ADMIN_PHONE configuré
+        not message.get("is_outgoing")
+        and _is_admin_command(message["sender"], message["text"])
+    )
+
+    if is_admin_cmd:
+        logger.info("Commande admin détectée : %s → conv %s",
+                    message["text"], message["phone"])
+        try:
+            _handle_admin_command(
+                phone=message["phone"],       # numéro du client
+                text=message["text"],
+                wa_message_id=message["wa_message_id"],
+                chat_id=message["phone"],
+            )
+        except Exception as e:
+            logger.exception("Erreur commande admin : %s", e)
+        return jsonify({"status": "ok"}), 200
+
+    # ── Ignorer les messages sortants non-commandes ──────────────
+    # (réponses IA, relances) — évite les boucles
+    if message.get("is_outgoing"):
+        logger.debug("Message sortant non-commande ignoré : %s", message["text"][:40])
+        return jsonify({"status": "ignored", "reason": "outgoing_non_command"}), 200
+
+    # ── Traitement normal — message client entrant ───────────────
     try:
         manager = ConversationManager()
         manager.handle_incoming(
@@ -160,8 +304,6 @@ def whatsapp_inbound():
             wa_message_id=message["wa_message_id"],
         )
     except Exception as e:
-        # On log l'erreur mais on retourne 200 à Green API
-        # pour éviter les renvois en boucle
-        logger.exception("Erreur dans handle_incoming pour %s : %s", message["phone"], e)
+        logger.exception("Erreur handle_incoming pour %s : %s", message["phone"], e)
 
     return jsonify({"status": "ok"}), 200

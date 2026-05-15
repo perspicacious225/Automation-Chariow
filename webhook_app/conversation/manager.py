@@ -13,6 +13,7 @@ Point central qui coordonne :
 
 import logging
 from typing import Optional
+import re
 
 from webhook_app.database_conv import (
     get_or_create_conversation,
@@ -116,43 +117,73 @@ class ConversationManager:
             user_message=text,
         )
 
-        # 6. Appeler le LLM
-        try:
-            response_text, chunk_ids = self.llm_engine.generate(
-                system_prompt=context["system_prompt"],
-                messages=context["messages"],
-            )
-        except Exception as e:
-            logger.exception("Erreur LLM pour conversation %s : %s", conv_id, e)
-            # Message de fallback en cas d'erreur LLM
+        # Vérifier escalade immédiate avant le LLM
+        if self.state_machine.should_escalate(text):
+            logger.info("Escalade immédiate détectée avant LLM")
             response_text = (
-                "Désolé, je rencontre une difficulté technique en ce moment. "
-                "Un membre de notre équipe va vous répondre très bientôt. 🙏"
+                "Je comprends ta situation. Un membre de notre équipe "
+                "va te contacter très rapidement pour résoudre ça. 🙏"
             )
             chunk_ids = []
+            escalade_requise = True
 
+        else:
+            # 6. Appeler le LLM
+            try:
+                response_text, chunk_ids = self.llm_engine.generate(
+                    system_prompt=context["system_prompt"],
+                    messages=context["messages"],
+                )
+            except Exception as e:
+                logger.exception("Erreur LLM pour conversation %s : %s", conv_id, e)
+                response_text = (
+                    "Désolé, je rencontre une difficulté technique en ce moment. "
+                    "Un membre de notre équipe va vous répondre très bientôt. 🙏"
+                )
+                chunk_ids = []
+
+            # ── Détecter escalade via tag LLM ─────────────────────────
+            escalade_requise = "[ESCALADE_REQUISE]" in response_text
+
+        logger.info("=== ESCALADE CHECK ===")
+        logger.info("response_text brut : %s", response_text[:200])
+        logger.info("escalade_requise : %s", escalade_requise)
+        logger.info("======================")
+
+        response_clean = re.sub(r'\[ESCALADE_REQUISE\]', '', response_text).strip()
+       
         # 7. Sauvegarder la réponse assistant
         save_message(
             conv_id,
             role="assistant",
-            content=response_text,
-            metadata={"chunks_used": chunk_ids},
+            content=response_clean,
+            metadata={
+                "chunks_used": chunk_ids,
+                "escalade": escalade_requise,
+            },
         )
 
         # 8. Envoyer via WhatsApp
         try:
-            logger.info("Envoi réponse → phone=%s", phone)
-            _wa.send_message_direct(chatId=phone, message=response_text, conv_id=conv_id, )
-        except Exception as e:
-            logger.exception(
-                "Erreur envoi WhatsApp pour %s : %s", phone, e
+            _wa.send_message_direct(
+                chatId=phone,
+                message=response_clean,
+                conv_id=conv_id,
             )
+        except Exception as e:
+            logger.exception("Erreur envoi WhatsApp pour %s : %s", phone, e)
 
-        # 9. Transition d'état
+        # 9. Gérer l'escalade automatique
+        if escalade_requise:
+            logger.info("→ Déclenchement _handle_escalade pour conv=%s phone=%s", conv_id, phone)
+            _handle_escalade(conv_id, phone, response_clean)
+        else:
+            logger.info("→ Pas d'escalade détectée")
+        # 10. Transition d'état
         new_state = self.state_machine.transition(
             current_state=current_state,
             user_message=text,
-            assistant_response=response_text,
+            assistant_response=response_clean,
             conversation=conversation,
         )
         if new_state and new_state != current_state:
@@ -215,3 +246,43 @@ class ConversationManager:
             "Contexte conversationnel mis à jour — phone=%s | event=%s | state=%s",
             phone, event_type, new_state,
         )
+
+def _handle_escalade(conv_id: str, phone: str, last_message: str) -> None:
+    """
+    Gère l'escalade automatique :
+    1. Désactive l'IA sur la conversation
+    2. Met l'état en escalation
+    3. Notifie l'admin par WhatsApp
+    """
+    from webhook_app.database_conv import (
+        update_conversation_state,
+        toggle_ai,
+    )
+    from webhook_app.services.whatsapp import WhatsAppService
+    from webhook_app.config import Config
+
+    # Désactiver l'IA
+    toggle_ai(conv_id, False)
+    logger.info("IA désactivée — escalade conv=%s", conv_id)
+
+    # Mettre l'état en escalation
+    update_conversation_state(conv_id, "escalation")
+    logger.info("État → escalation conv=%s", conv_id)
+
+    # Extraire les 4 derniers chiffres pour identification rapide
+    phone_digits = phone.replace("@c.us", "").strip()
+    short_id = phone_digits[-4:] if len(phone_digits) >= 4 else phone_digits
+
+    # Notification admin
+    wa = WhatsAppService()
+    notif = (
+        f"🚨 *Escalade requise — #{short_id}*\n\n"
+        f"Client : {phone_digits}\n"
+        f"Dernier message IA : {last_message[:120]}...\n\n"
+        f"Commandes disponibles dans la discussion client :\n"
+        f"• *#REPRISE* — réactiver l'IA\n"
+        f"• *#PAUSE* — garder la main\n"
+        f"• *#RESOLU* — résolu + réactiver l'IA"
+    )
+    wa.send_to_admin(notif, conv_id=conv_id)
+    logger.info("Notification escalade envoyée à l'admin")

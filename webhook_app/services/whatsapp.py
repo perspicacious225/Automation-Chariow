@@ -165,6 +165,62 @@ class WhatsAppService:
             logger.error(f"Failed to send to {final_id}: {str(e)}")
             return False
 
+
+    def delete_message(self, chat_id: str, message_id: str) -> bool:
+        """
+        Supprime un message dans une conversation WhatsApp.
+        Utilisé pour supprimer les tags admin (#REPRISE etc.)
+        après traitement — invisibles pour le client.
+        """
+        try:
+            url = (
+                f"https://api.green-api.com"
+                f"/waInstance{Config.INSTANCE_ID}"
+                f"/deleteMessage/{Config.TOKEN}"
+            )
+            response = requests.post(
+                url,
+                json={"chatId": chat_id, "idMessage": message_id},
+                timeout=10,
+            )
+            response.raise_for_status()
+            logger.info(f"Message supprimé : {message_id} dans {chat_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Erreur suppression message {message_id} : {e}")
+            return False
+
+
+    def send_to_admin(self, message: str, conv_id: str | None = None) -> bool:
+        admin_phone = Config.ADMIN_PHONE
+        if not admin_phone:
+            logger.warning("ADMIN_PHONE non configuré")
+            return False
+
+        # Utiliser le LID résolu depuis la conversation si disponible
+        if conv_id:
+            from webhook_app.database_conv import get_or_set_lid
+            chat_id = get_or_set_lid(
+                conv_id=conv_id,
+                phone_raw=f"{admin_phone}@c.us",
+                resolver_fn=self._call_check_whatsapp,
+            )
+        else:
+            lid = self._call_check_whatsapp(admin_phone)
+            chat_id = lid if lid else f"{admin_phone}@c.us"
+
+        try:
+            response = requests.post(
+                Config.API_URL,
+                json={"chatId": chat_id, "message": message},
+                timeout=10,
+            )
+            response.raise_for_status()
+            logger.info(f"Notification admin envoyée → {chat_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Erreur notification admin : {e}")
+            return False
 # test =  WhatsAppService()
 
 # print(test.normalize_for_dedupe("2250789333113"))

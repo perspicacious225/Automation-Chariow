@@ -1,0 +1,619 @@
+{% extends "dashboard_v2/base.html" %}
+
+{% block title %}Conversations{% endblock %}
+
+{% block topbar %}
+<div class="topbar">
+  <div>
+    <span class="topbar-title">Conversations</span>
+    <span class="topbar-sub" id="convCount">Chargement...</span>
+  </div>
+  <div class="topbar-right">
+    <div class="search-wrap">
+      <i class="ti ti-search"></i>
+      <input class="search-input" id="searchInput" placeholder="Rechercher un numéro..." />
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="loadConversations()">
+      <i class="ti ti-refresh"></i> Actualiser
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Stats -->
+<div class="stats-grid" id="statsGrid">
+  <div class="stat-card blue skeleton" style="height:72px;"></div>
+  <div class="stat-card green skeleton" style="height:72px;"></div>
+  <div class="stat-card red skeleton" style="height:72px;"></div>
+  <div class="stat-card amber skeleton" style="height:72px;"></div>
+</div>
+
+<!-- Filtres -->
+<div class="filter-row">
+  <button class="chip active" data-state="">Toutes</button>
+  <button class="chip" data-state="new_prospect">Prospects</button>
+  <button class="chip" data-state="interested_lead">Intéressés</button>
+  <button class="chip" data-state="pre_sale">Pre-sale</button>
+  <button class="chip" data-state="payment_failed">Paiement échoué</button>
+  <button class="chip" data-state="payment_abandoned">Abandonné</button>
+  <button class="chip" data-state="post_sale">Post-sale</button>
+  <button class="chip" data-state="support">Support</button>
+  <button class="chip" data-state="escalation" style="border-color:rgba(226,75,74,0.3);color:var(--red);">
+    <i class="ti ti-alert-triangle" style="font-size:11px;"></i> Escalades
+  </button>
+</div>
+
+<!-- Liste conversations -->
+<div id="convList">
+  <!-- Skeleton -->
+  {% for i in range(5) %}
+  <div class="conv-row-skeleton skeleton" style="height:64px;border-radius:10px;margin-bottom:8px;"></div>
+  {% endfor %}
+</div>
+
+<!-- Pagination -->
+<div id="pagination" style="display:none;margin-top:14px;display:flex;gap:8px;align-items:center;justify-content:flex-end;">
+  <button class="btn btn-ghost btn-sm" id="btnPrev" onclick="changePage(-1)">
+    <i class="ti ti-chevron-left"></i> Précédent
+  </button>
+  <span class="text-muted" id="pageInfo" style="font-size:12px;"></span>
+  <button class="btn btn-ghost btn-sm" id="btnNext" onclick="changePage(1)">
+    Suivant <i class="ti ti-chevron-right"></i>
+  </button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE PANEL — Détail conversation
+═══════════════════════════════════════════════════════════════════ -->
+<div class="slide-overlay" id="slideOverlay" onclick="closePanel()"></div>
+
+<div class="slide-panel" id="slidePanel">
+
+  <!-- Header -->
+  <div style="padding:14px 16px;border-bottom:0.5px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;">
+    <div id="panelAvatar" style="width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;background:rgba(30,111,217,0.15);color:var(--blue-light);">?</div>
+    <div style="min-width:0;flex:1;">
+      <div id="panelPhone" style="font-size:13px;font-weight:700;color:#fff;font-family:var(--font-mono);">—</div>
+      <div id="panelName"  style="font-size:11px;color:var(--text-muted);">—</div>
+    </div>
+    <div id="panelBadge"></div>
+    <button class="btn-icon" onclick="closePanel()" title="Fermer">
+      <i class="ti ti-x"></i>
+    </button>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs" style="padding:0 16px;margin-bottom:0;flex-shrink:0;">
+    <div class="tab active" onclick="switchTab('messages',this)">Messages</div>
+    <div class="tab" onclick="switchTab('context',this)">Contexte</div>
+  </div>
+
+  <!-- Actions -->
+  <div style="padding:10px 14px;border-bottom:0.5px solid var(--border);display:flex;gap:6px;align-items:center;flex-shrink:0;flex-wrap:wrap;">
+    <button class="btn btn-sm" id="btnToggleAI" onclick="toggleAI()">
+      <i class="ti ti-robot"></i> <span id="toggleAILabel">Désactiver IA</span>
+    </button>
+    <select class="form-select" id="stateSelect" onchange="forceState()" style="width:auto;padding:5px 10px;font-size:11px;">
+      <option value="">— Changer l'état —</option>
+      <option value="new_prospect">new_prospect</option>
+      <option value="interested_lead">interested_lead</option>
+      <option value="pre_sale">pre_sale</option>
+      <option value="payment_failed">payment_failed</option>
+      <option value="payment_abandoned">payment_abandoned</option>
+      <option value="payment_success">payment_success</option>
+      <option value="post_sale">post_sale</option>
+      <option value="support">support</option>
+      <option value="escalation">escalation</option>
+    </select>
+  </div>
+
+  <!-- Escalade banner -->
+  <div class="escalade-alert" id="escaladeBanner" style="display:none;margin:10px 14px 0;flex-shrink:0;">
+    <i class="ti ti-alert-triangle" style="font-size:16px;flex-shrink:0;"></i>
+    <span>Escalade requise — intervention humaine attendue. Utilisez <strong>#REPRISE</strong> sur WhatsApp pour réactiver l'IA.</span>
+  </div>
+
+  <!-- Tab : Messages -->
+  <div id="tabMessages" style="flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;">
+    <div style="text-align:center;padding:40px 0;">
+      <i class="ti ti-messages" style="font-size:32px;color:var(--text-muted);display:block;margin-bottom:8px;"></i>
+      <div style="color:var(--text-muted);font-size:12px;">Sélectionnez une conversation</div>
+    </div>
+  </div>
+
+  <!-- Tab : Contexte -->
+  <div id="tabContext" style="flex:1;overflow-y:auto;padding:14px;display:none;">
+    <div id="contextContent"></div>
+  </div>
+
+  <!-- Zone réponse admin -->
+  <div style="padding:10px 14px;border-top:0.5px solid var(--border);display:flex;gap:8px;align-items:flex-end;flex-shrink:0;">
+    <textarea
+      id="replyInput"
+      class="form-textarea"
+      placeholder="Répondre en tant qu'admin (IA désactivée requise)..."
+      rows="1"
+      style="min-height:36px;max-height:80px;resize:none;"
+      oninput="autoResize(this)"
+      onkeydown="if(event.ctrlKey&&event.key==='Enter'){sendReply();}"
+    ></textarea>
+    <button class="btn btn-primary btn-sm" onclick="sendReply()" style="flex-shrink:0;">
+      <i class="ti ti-send"></i>
+    </button>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var currentConvId = null;
+var currentAiActive = true;
+var currentPage = 0;
+var currentState = '';
+var currentSearch = '';
+var PAGE_SIZE = 20;
+
+var eventSource = null;
+
+/* ── Chargement conversations ───────────────────────────────────── */
+async function loadConversations() {
+  var url = '/dashboard/v2/api/conversations/?limit=' + PAGE_SIZE + '&offset=' + (currentPage * PAGE_SIZE);
+  if (currentState) url += '&state=' + currentState;
+
+  try {
+    var data = await api('GET', url);
+    renderStats(data.stats || {});
+    renderList(data.conversations || []);
+    renderPagination(data.count);
+    document.getElementById('convCount').textContent = '— ' + (data.stats.total || 0) + ' actives';
+  } catch(e) {
+    showToast('Erreur chargement conversations', 'error');
+  }
+}
+
+/* ── Stats ──────────────────────────────────────────────────────── */
+function renderStats(s) {
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat-card blue">
+      <div class="stat-label">Conversations</div>
+      <div class="stat-value">${s.total || 0}</div>
+      <div class="stat-delta neutral">${s.prospects || 0} nouveaux prospects</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Convertis</div>
+      <div class="stat-value">${s.converted || 0}</div>
+      <div class="stat-delta up">Achats réalisés</div>
+    </div>
+    <div class="stat-card red">
+      <div class="stat-label">Escalades</div>
+      <div class="stat-value">${s.escalations || 0}</div>
+      <div class="stat-delta ${s.escalations > 0 ? 'down' : 'neutral'}">${s.escalations > 0 ? 'Intervention requise' : 'Aucune en cours'}</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-label">Humain en main</div>
+      <div class="stat-value">${s.human_active || 0}</div>
+      <div class="stat-delta warn">IA désactivée</div>
+    </div>
+  `;
+}
+
+/* ── Liste ──────────────────────────────────────────────────────── */
+var STATE_LABELS = {
+  new_prospect:      { label:'Prospect',       cls:'badge-blue' },
+  interested_lead:   { label:'Intéressé',      cls:'badge-cyan' },
+  pre_sale:          { label:'Pre-sale',        cls:'badge-amber' },
+  payment_failed:    { label:'Échec paiement', cls:'badge-red' },
+  payment_abandoned: { label:'Abandonné',      cls:'badge-red' },
+  payment_success:   { label:'Achat réussi',   cls:'badge-green' },
+  post_sale:         { label:'Post-sale',       cls:'badge-green' },
+  support:           { label:'Support',         cls:'badge-gray' },
+  escalation:        { label:'Escalade',        cls:'badge-red pulse' },
+};
+
+var ACCENT_COLORS = {
+  escalation:        '#E24B4A',
+  payment_failed:    '#E24B4A',
+  payment_abandoned: '#EF9F27',
+  pre_sale:          '#EF9F27',
+  post_sale:         '#1D9E75',
+  payment_success:   '#1D9E75',
+  new_prospect:      '#1E6FD9',
+  interested_lead:   '#29ABE2',
+  support:           '#8899AA',
+};
+
+function getInitials(phone) {
+  var digits = (phone || '').replace(/\D/g,'');
+  return digits.slice(-4, -2) || 'XX';
+}
+
+function renderList(convs) {
+  var search = currentSearch.toLowerCase().trim();
+  var filtered = search
+    ? convs.filter(function(c) {
+        return (c.phone||'').toLowerCase().includes(search)
+            || (c.last_message||'').toLowerCase().includes(search);
+      })
+    : convs;
+
+  if (!filtered.length) {
+    document.getElementById('convList').innerHTML = `
+      <div style="text-align:center;padding:48px 0;color:var(--text-muted);">
+        <i class="ti ti-inbox" style="font-size:36px;display:block;margin-bottom:10px;"></i>
+        <div style="font-size:13px;">Aucune conversation trouvée</div>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('convList').innerHTML = filtered.map(function(c) {
+    var si = STATE_LABELS[c.state] || { label: c.state, cls: 'badge-gray' };
+    var accent = ACCENT_COLORS[c.state] || '#1E6FD9';
+    var initials = getInitials(c.phone);
+    var lastMsg = (c.last_message || '').substring(0, 90);
+    var time = c.last_message_time ? timeAgo(c.last_message_time) : '';
+    var aiIcon = c.ai_active ? 'ti-robot' : 'ti-user';
+    var aiColor = c.ai_active ? 'var(--blue-light)' : 'var(--amber)';
+    var isActive = currentConvId === c.id ? 'active-conv' : '';
+
+    return `
+    <div class="conv-row ${isActive}" data-id="${c.id}" onclick="openPanel('${c.id}')"
+         style="--accent:${accent};">
+      <div class="conv-avatar" style="background:${accent}22;color:${accent};">${initials}</div>
+      <div class="conv-info">
+        <div class="conv-name">
+          <span class="mono" style="font-size:12px;">${c.phone || '—'}</span>
+        </div>
+        <div class="conv-preview">${lastMsg || '<span style="color:var(--text-muted);font-style:italic;">Aucun message</span>'}</div>
+      </div>
+      <div class="conv-meta">
+        <span class="badge ${si.cls}">${si.label}</span>
+        <div style="display:flex;align-items:center;gap:4px;margin-top:4px;">
+          <i class="ti ${aiIcon}" style="font-size:12px;color:${aiColor};"></i>
+          <span style="font-size:10px;color:var(--text-muted);">${time}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderPagination(total) {
+  var pag = document.getElementById('pagination');
+  if (total <= PAGE_SIZE) { pag.style.display = 'none'; return; }
+  pag.style.display = 'flex';
+  var totalPages = Math.ceil(total / PAGE_SIZE);
+  document.getElementById('pageInfo').textContent = 'Page ' + (currentPage + 1) + ' / ' + totalPages;
+  document.getElementById('btnPrev').disabled = currentPage === 0;
+  document.getElementById('btnNext').disabled = currentPage >= totalPages - 1;
+}
+
+function changePage(dir) {
+  currentPage = Math.max(0, currentPage + dir);
+  loadConversations();
+}
+
+/* ── Filtres chips ──────────────────────────────────────────────── */
+document.querySelectorAll('.chip').forEach(function(chip) {
+  chip.addEventListener('click', function() {
+    document.querySelectorAll('.chip').forEach(function(c) { c.classList.remove('active'); });
+    chip.classList.add('active');
+    currentState = chip.dataset.state || '';
+    currentPage = 0;
+    loadConversations();
+  });
+});
+
+/* ── Recherche ──────────────────────────────────────────────────── */
+var searchTimer;
+document.getElementById('searchInput').addEventListener('input', function() {
+  clearTimeout(searchTimer);
+  currentSearch = this.value;
+  searchTimer = setTimeout(loadConversations, 300);
+});
+
+/* ── Panel slide ────────────────────────────────────────────────── */
+async function openPanel(convId) {
+  currentConvId = convId;
+  document.getElementById('slidePanel').classList.add('open');
+  document.getElementById('slideOverlay').classList.add('open');
+
+  document.getElementById('tabMessages').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${Array(4).fill('<div class="skeleton" style="height:40px;border-radius:8px;"></div>').join('')}
+    </div>`;
+
+  try {
+    var data = await api('GET', '/dashboard/v2/api/conversations/' + convId + '/');
+    var conv = data.conversation;
+    currentAiActive = conv.ai_active;
+
+    var si = STATE_LABELS[conv.state] || { label: conv.state, cls: 'badge-gray' };
+    var accent = ACCENT_COLORS[conv.state] || '#1E6FD9';
+    var initials = getInitials(conv.phone);
+
+    document.getElementById('panelAvatar').textContent = initials;
+    document.getElementById('panelAvatar').style.background = accent + '22';
+    document.getElementById('panelAvatar').style.color = accent;
+    document.getElementById('panelPhone').textContent = conv.phone || '—';
+    document.getElementById('panelName').textContent = 'État : ' + conv.state;
+    document.getElementById('panelBadge').innerHTML = '<span class="badge ' + si.cls + '">' + si.label + '</span>';
+    document.getElementById('escaladeBanner').style.display = conv.state === 'escalation' ? 'flex' : 'none';
+
+    updateToggleBtn(conv.ai_active);
+    document.getElementById('stateSelect').value = '';
+
+    renderHistory(data.history || []);
+    renderContext(conv, data.sale);
+
+  } catch(e) {
+    showToast('Erreur chargement conversation', 'error');
+  }
+
+  // ── SSE stream — temps réel ──────────────────────────────────
+  if (eventSource) { eventSource.close(); eventSource = null; }
+
+  eventSource = new EventSource(
+    '/dashboard/v2/api/conversations/' + convId + '/stream/'
+  );
+
+  eventSource.onmessage = function(e) {
+    try {
+      var data = JSON.parse(e.data);
+      if (data.history) renderHistory(data.history);
+    } catch(err) { /* ignorer les heartbeats */ }
+  };
+
+  eventSource.onerror = function() {
+    // Reconnexion automatique gérée par le navigateur
+    // On ferme proprement si la conversation a changé
+    if (!currentConvId || currentConvId !== convId) {
+      eventSource.close();
+      eventSource = null;
+    }
+  };
+}
+
+function closePanel() {
+  // Fermer le stream SSE
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  document.getElementById('slidePanel').classList.remove('open');
+  document.getElementById('slideOverlay').classList.remove('open');
+  currentConvId = null;
+}
+
+async function refreshPanelMessages() {
+  if (!currentConvId) return;
+  try {
+    var data = await api('GET', '/dashboard/v2/api/conversations/' + currentConvId + '/');
+    renderHistory(data.history || []);
+  } catch(e) { /* silencieux */ }
+}
+
+/* ── Tabs panel ─────────────────────────────────────────────────── */
+function switchTab(tab, el) {
+  document.querySelectorAll('.slide-panel .tab').forEach(function(t) { t.classList.remove('active'); });
+  el.classList.add('active');
+  document.getElementById('tabMessages').style.display = tab === 'messages' ? 'flex' : 'none';
+  document.getElementById('tabContext').style.display  = tab === 'context'  ? 'block' : 'none';
+}
+
+/* ── Historique messages ────────────────────────────────────────── */
+function renderHistory(history) {
+  if (!history.length) {
+    document.getElementById('tabMessages').innerHTML = `
+      <div style="text-align:center;padding:30px;color:var(--text-muted);font-size:12px;">
+        Aucun message dans cette conversation
+      </div>`;
+    return;
+  }
+
+  document.getElementById('tabMessages').innerHTML = history.map(function(msg) {
+    var isUser = msg.role === 'user';
+    var isAdmin = (msg.content || '').startsWith('[ADMIN]');
+    var content = (msg.content || '').replace('[ADMIN] ', '');
+    var roleLabel = isAdmin ? 'Admin' : (isUser ? 'Client' : 'Assistant IA');
+    var time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'}) : '';
+
+    var bubbleStyle = isUser
+      ? 'background:var(--blue);color:#fff;border-bottom-right-radius:3px;'
+      : isAdmin
+        ? 'background:rgba(239,159,39,0.1);border:0.5px solid rgba(239,159,39,0.3);color:var(--amber);border-bottom-left-radius:3px;'
+        : 'background:var(--bg-elevated);border:0.5px solid var(--border);color:var(--text-primary);border-bottom-left-radius:3px;';
+
+    var align = isUser ? 'align-self:flex-end;' : 'align-self:flex-start;';
+    var timeAlign = isUser ? 'text-align:right;' : '';
+
+    return `
+    <div style="max-width:82%;display:flex;flex-direction:column;gap:2px;${align}animation:msg-in 0.2s ease;">
+      <div style="font-size:10px;color:var(--text-muted);${timeAlign}">${roleLabel}</div>
+      <div style="padding:8px 12px;border-radius:10px;font-size:12px;line-height:1.55;${bubbleStyle}">${escapeHtml(content)}</div>
+      <div style="font-size:10px;color:var(--text-muted);${timeAlign}">${time}</div>
+    </div>`;
+  }).join('');
+
+  var area = document.getElementById('tabMessages');
+  area.scrollTop = area.scrollHeight;
+}
+
+/* ── Contexte transactionnel ────────────────────────────────────── */
+function renderContext(conv, sale) {
+  var rows = [
+    ['Téléphone', conv.phone || '—'],
+    ['État',      conv.state || '—'],
+    ['IA active', conv.ai_active ? 'Oui' : 'Non'],
+    ['Produit',   conv.product_id || '—'],
+    ['Vente ID',  conv.last_sale_id || '—'],
+    ['LID',       conv.lid || '—'],
+    ['Créé le',   conv.created_at ? new Date(conv.created_at).toLocaleString('fr-FR') : '—'],
+  ];
+
+  var saleRows = sale ? [
+    ['Produit',  sale.product_name || sale.product_id || '—'],
+    ['Montant',  sale.amount_value ? sale.amount_value + ' ' + (sale.currency||'XOF') : '—'],
+    ['Statut',   sale.status || '—'],
+    ['Date',     sale.completed_at ? new Date(sale.completed_at).toLocaleString('fr-FR') : '—'],
+  ] : [];
+
+  document.getElementById('contextContent').innerHTML = `
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Conversation</div>
+    <div class="card" style="margin-bottom:14px;">
+      <table style="width:100%;border-collapse:collapse;">
+        ${rows.map(function(r) { return `
+          <tr style="border-bottom:0.5px solid var(--border-light);">
+            <td style="padding:8px 14px;font-size:11px;color:var(--text-muted);width:40%;">${r[0]}</td>
+            <td style="padding:8px 14px;font-size:12px;color:var(--text-primary);font-family:${r[0]==='Téléphone'||r[0]==='LID'?'var(--font-mono)':'inherit'};">${escapeHtml(String(r[1]))}</td>
+          </tr>`; }).join('')}
+      </table>
+    </div>
+    ${sale ? `
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Dernière transaction</div>
+    <div class="card">
+      <table style="width:100%;border-collapse:collapse;">
+        ${saleRows.map(function(r) { return `
+          <tr style="border-bottom:0.5px solid var(--border-light);">
+            <td style="padding:8px 14px;font-size:11px;color:var(--text-muted);width:40%;">${r[0]}</td>
+            <td style="padding:8px 14px;font-size:12px;color:var(--text-primary);">${escapeHtml(String(r[1]))}</td>
+          </tr>`; }).join('')}
+      </table>
+    </div>` : '<div style="color:var(--text-muted);font-size:12px;padding:12px 0;">Aucune transaction liée</div>'}
+  `;
+}
+
+/* ── Toggle IA ──────────────────────────────────────────────────── */
+function updateToggleBtn(aiActive) {
+  var btn = document.getElementById('btnToggleAI');
+  var label = document.getElementById('toggleAILabel');
+  if (aiActive) {
+    btn.className = 'btn btn-sm btn-danger';
+    btn.querySelector('i').className = 'ti ti-user';
+    label.textContent = 'Prendre la main';
+  } else {
+    btn.className = 'btn btn-sm btn-primary';
+    btn.querySelector('i').className = 'ti ti-robot';
+    label.textContent = 'Réactiver IA';
+  }
+}
+
+async function toggleAI() {
+  if (!currentConvId) return;
+  var newState = !currentAiActive;
+  try {
+    await api('POST', '/dashboard/v2/api/conversations/' + currentConvId + '/toggle-ai/', { ai_active: newState });
+    currentAiActive = newState;
+    updateToggleBtn(newState);
+    var msg = newState ? 'IA réactivée — le bot reprend' : 'IA désactivée — vous êtes en main';
+    showToast(msg, newState ? 'success' : 'info');
+    if (!newState) document.getElementById('escaladeBanner').style.display = 'none';
+    loadConversations();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Forcer état ────────────────────────────────────────────────── */
+async function forceState() {
+  if (!currentConvId) return;
+  var sel = document.getElementById('stateSelect');
+  var newState = sel.value;
+  if (!newState) return;
+  try {
+    await api('POST', '/dashboard/v2/api/conversations/' + currentConvId + '/state/', { state: newState });
+    showToast('État mis à jour : ' + newState, 'success');
+    document.getElementById('panelName').textContent = 'État : ' + newState;
+    sel.value = '';
+    loadConversations();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Réponse admin ──────────────────────────────────────────────── */
+async function sendReply() {
+  if (!currentConvId) return;
+  var input = document.getElementById('replyInput');
+  var message = input.value.trim();
+  if (!message) return;
+
+  if (currentAiActive) {
+    showToast('Désactivez l\'IA avant de répondre manuellement', 'warning');
+    return;
+  }
+
+  try {
+    await api('POST', '/dashboard/v2/api/conversations/' + currentConvId + '/reply/', { message: message });
+    input.value = '';
+    input.style.height = '36px';
+    showToast('Message envoyé via WhatsApp', 'success');
+    openPanel(currentConvId);
+  } catch(e) {
+    showToast('Erreur envoi : ' + e.message, 'error');
+  }
+}
+
+/* ── Utilitaires ────────────────────────────────────────────────── */
+function autoResize(el) {
+  el.style.height = '36px';
+  el.style.height = Math.min(el.scrollHeight, 80) + 'px';
+}
+
+function timeAgo(isoStr) {
+  var diff = (Date.now() - new Date(isoStr)) / 1000;
+  if (diff < 60)   return 'À l\'instant';
+  if (diff < 3600) return Math.floor(diff/60) + ' min';
+  if (diff < 86400)return Math.floor(diff/3600) + 'h';
+  return Math.floor(diff/86400) + 'j';
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+/* ── Styles inline pour la liste ────────────────────────────────── */
+var style = document.createElement('style');
+style.textContent = `
+  .conv-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    background: var(--bg-elevated);
+    border: 0.5px solid var(--border);
+    border-left: 3px solid var(--accent, var(--border));
+    border-radius: 10px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .conv-row:hover { border-color: var(--blue); transform: translateX(3px); background: var(--bg-hover); }
+  .conv-row.active-conv { border-color: var(--blue); background: var(--blue-glow); }
+  .conv-avatar { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; font-family:var(--font-mono); flex-shrink:0; }
+  .conv-info { flex:1; min-width:0; }
+  .conv-name { font-size:12px; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .conv-preview { font-size:11px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; max-width:260px; }
+  .conv-meta { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0; }
+  @keyframes msg-in { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:translateY(0)} }
+`;
+document.head.appendChild(style);
+
+/* ── Init ───────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', function() {
+  loadConversations();
+  setInterval(function() {
+    // Reload silencieux sans skeleton
+    loadConversationsSilent();
+}, 10000);
+});
+</script>
+{% endblock %}
