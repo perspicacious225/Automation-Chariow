@@ -898,13 +898,23 @@
       </a>
 
       <div class="nav-section">Analyse</div>
+      <a href="/dashboard/v2/escalations/" class="nav-item {% if request.endpoint == 'dashboard_v2.escalations' %}active{% endif %}">
+        <i class="ti ti-alert-triangle"></i>
+        Historique escalades
+      </a>
       <a href="#" class="nav-item">
         <i class="ti ti-chart-bar"></i>
         Statistiques
       </a>
-      <a href="#" class="nav-item">
-        <i class="ti ti-history"></i>
-        Historique escalades
+
+      <div class="nav-section">Configuration</div>
+      <a href="/dashboard/v2/blacklist/" class="nav-item {% if request.endpoint == 'dashboard_v2.blacklist' %}active{% endif %}">
+        <i class="ti ti-ban"></i>
+        Blacklist
+      </a>
+      <a href="/dashboard/v2/hours/" class="nav-item {% if request.endpoint == 'dashboard_v2.hours' %}active{% endif %}">
+        <i class="ti ti-clock"></i>
+        Heures d'ouverture
       </a>
 
       <div class="nav-section">Système</div>

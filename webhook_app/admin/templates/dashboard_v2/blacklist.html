@@ -1,0 +1,219 @@
+{% extends "dashboard_v2/base.html" %}
+
+{% block title %}Blacklist{% endblock %}
+
+{% block topbar %}
+<div class="topbar">
+  <div>
+    <span class="topbar-title">Blacklist</span>
+    <span class="topbar-sub" id="blSubtitle">Chargement...</span>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-ghost btn-sm" onclick="loadBlacklist()">
+      <i class="ti ti-refresh"></i> Actualiser
+    </button>
+    <button class="btn btn-primary btn-sm" onclick="openModal('modalAdd')">
+      <i class="ti ti-plus"></i> Bloquer un numéro
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Stats -->
+<div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,180px));" id="blStats">
+  <div class="stat-card red skeleton" style="height:72px;"></div>
+</div>
+
+<!-- Liste -->
+<div style="margin-top:20px;">
+  <div style="font-size:13px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:6px;margin-bottom:12px;">
+    <i class="ti ti-ban" style="font-size:16px;color:var(--text-muted);"></i>
+    Numéros bloqués
+  </div>
+
+  <div class="search-wrap" style="margin-bottom:12px;">
+    <i class="ti ti-search"></i>
+    <input class="search-input" id="blSearch" placeholder="Rechercher un numéro..." style="width:260px;" />
+  </div>
+
+  <div id="blList">
+    <div class="skeleton" style="height:52px;border-radius:10px;margin-bottom:6px;"></div>
+    <div class="skeleton" style="height:52px;border-radius:10px;margin-bottom:6px;"></div>
+    <div class="skeleton" style="height:52px;border-radius:10px;"></div>
+  </div>
+</div>
+
+<!-- Modal ajouter -->
+<div class="modal-overlay" id="modalAdd">
+  <div class="modal-box" style="width:440px;">
+    <div class="modal-header">
+      <div class="modal-title">Bloquer un numéro</div>
+      <button class="btn-icon" onclick="closeModal('modalAdd')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Numéro WhatsApp</label>
+        <input class="form-input" id="blPhone" placeholder="Ex: 2250789333113" style="font-family:var(--font-mono);" />
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Format international sans + ni @c.us</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Raison <span style="font-weight:400;text-transform:none;">(optionnel)</span></label>
+        <input class="form-input" id="blReason" placeholder="Ex: Spam, comportement abusif..." />
+      </div>
+      <div style="background:rgba(226,75,74,0.08);border:0.5px solid rgba(226,75,74,0.25);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--red);display:flex;align-items:center;gap:8px;">
+        <i class="ti ti-alert-triangle" style="font-size:14px;flex-shrink:0;"></i>
+        Ce numéro ne recevra plus aucune réponse de l'IA.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalAdd')">Annuler</button>
+      <button class="btn btn-danger" onclick="addToBlacklist()" style="background:var(--red);color:#fff;border:none;">
+        <i class="ti ti-ban"></i> Bloquer
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal confirmer suppression -->
+<div class="modal-overlay" id="modalConfirm">
+  <div class="modal-box" style="width:380px;">
+    <div class="modal-header">
+      <div class="modal-title">Débloquer ce numéro ?</div>
+      <button class="btn-icon" onclick="closeModal('modalConfirm')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--text-primary);margin-bottom:8px;">
+        Numéro : <span id="confirmPhone" style="font-family:var(--font-mono);color:var(--blue-light);"></span>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);">
+        Ce numéro pourra de nouveau recevoir des réponses de l'IA.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalConfirm')">Annuler</button>
+      <button class="btn btn-primary" onclick="confirmRemove()">
+        <i class="ti ti-check"></i> Débloquer
+      </button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var allItems = [];
+var phoneToRemove = null;
+
+async function loadBlacklist() {
+  try {
+    var data = await api('GET', '/dashboard/v2/api/blacklist/');
+    allItems = data.blacklist || [];
+    renderStats(allItems.length);
+    renderList(allItems);
+    document.getElementById('blSubtitle').textContent = '— ' + allItems.length + ' numéros bloqués';
+  } catch(e) {
+    showToast('Erreur chargement blacklist', 'error');
+  }
+}
+
+function renderStats(count) {
+  document.getElementById('blStats').innerHTML = `
+    <div class="stat-card red">
+      <div class="stat-label">Numéros bloqués</div>
+      <div class="stat-value">${count}</div>
+      <div class="stat-hint">Total blacklist</div>
+    </div>
+  `;
+}
+
+function renderList(items) {
+  var search = (document.getElementById('blSearch').value || '').toLowerCase();
+  var filtered = search
+    ? items.filter(function(i) {
+        return (i.phone||'').includes(search) || (i.reason||'').toLowerCase().includes(search);
+      })
+    : items;
+
+  if (!filtered.length) {
+    document.getElementById('blList').innerHTML = `
+      <div style="text-align:center;padding:48px;color:var(--text-muted);">
+        <i class="ti ti-ban" style="font-size:36px;display:block;margin-bottom:10px;opacity:.3;"></i>
+        <div style="font-size:13px;">Aucun numéro bloqué</div>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('blList').innerHTML = filtered.map(function(item) {
+    var date = item.created_at ? new Date(item.created_at).toLocaleDateString('fr-FR') : '—';
+    return `
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-elevated);border:0.5px solid var(--border);border-left:3px solid var(--red);border-radius:10px;margin-bottom:6px;">
+      <div style="width:36px;height:36px;border-radius:50%;background:rgba(226,75,74,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <i class="ti ti-ban" style="font-size:16px;color:var(--red);"></i>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:600;color:var(--text-primary);font-family:var(--font-mono);">${item.phone}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+          ${item.reason ? escapeHtml(item.reason) : '<span style="font-style:italic;">Aucune raison</span>'}
+          · Bloqué le ${date}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="badge badge-red" style="font-size:10px;">Bloqué</span>
+        <button class="btn-icon" title="Débloquer" onclick="promptRemove('${item.phone}')">
+          <i class="ti ti-lock-open" style="font-size:14px;"></i>
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function addToBlacklist() {
+  var phone = document.getElementById('blPhone').value.trim();
+  var reason = document.getElementById('blReason').value.trim();
+  if (!phone) { showToast('Numéro requis', 'warning'); return; }
+
+  try {
+    await api('POST', '/dashboard/v2/api/blacklist/', { phone, reason });
+    closeModal('modalAdd');
+    document.getElementById('blPhone').value = '';
+    document.getElementById('blReason').value = '';
+    showToast(phone + ' bloqué', 'success');
+    loadBlacklist();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+function promptRemove(phone) {
+  phoneToRemove = phone;
+  document.getElementById('confirmPhone').textContent = phone;
+  openModal('modalConfirm');
+}
+
+async function confirmRemove() {
+  if (!phoneToRemove) return;
+  try {
+    await fetch('/dashboard/v2/api/blacklist/' + encodeURIComponent(phoneToRemove) + '/', { method: 'DELETE' });
+    closeModal('modalConfirm');
+    showToast(phoneToRemove + ' débloqué', 'success');
+    phoneToRemove = null;
+    loadBlacklist();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+document.getElementById('blSearch').addEventListener('input', function() {
+  renderList(allItems);
+});
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+document.addEventListener('DOMContentLoaded', loadBlacklist);
+</script>
+{% endblock %}

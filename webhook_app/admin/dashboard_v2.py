@@ -385,7 +385,11 @@ def api_kb_upload():
     # Lancer l'ingestion
     try:
         from webhook_app.rag.ingestion import ingest_product
-        ingestion_result = ingest_product(product_id, force=True)
+        ingestion_result = ingest_product(
+            product_id,
+            force=True,
+            text_override=combined_text.strip(),
+        )
     except Exception as e:
         logger.exception("Erreur ingestion après upload : %s", e)
         return jsonify({
@@ -400,6 +404,116 @@ def api_kb_upload():
     })
 
 
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGES HTML v2.1.0
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/blacklist/")
+@login_required
+def blacklist():
+    return render_template("dashboard_v2/blacklist.html")
+
+
+@dashboard_v2_bp.get("/hours/")
+@login_required
+def hours():
+    return render_template("dashboard_v2/hours.html")
+
+
+@dashboard_v2_bp.get("/escalations/")
+@login_required
+def escalations():
+    return render_template("dashboard_v2/escalations.html")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API — BLACKLIST
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/api/blacklist/")
+@login_required
+def api_list_blacklist():
+    from webhook_app.database_v21 import list_blacklist
+    items = list_blacklist()
+    return jsonify({"blacklist": items, "count": len(items)})
+
+
+@dashboard_v2_bp.post("/api/blacklist/")
+@login_required
+def api_add_blacklist():
+    from webhook_app.database_v21 import add_to_blacklist
+    body = request.get_json(silent=True) or {}
+    phone = (body.get("phone") or "").strip()
+    reason = (body.get("reason") or "").strip()
+    if not phone:
+        return jsonify({"error": "Numéro requis"}), 400
+    add_to_blacklist(phone, reason)
+    return jsonify({"status": "ok", "phone": phone})
+
+
+@dashboard_v2_bp.delete("/api/blacklist/<phone>/")
+@login_required
+def api_remove_blacklist(phone: str):
+    from webhook_app.database_v21 import remove_from_blacklist
+    ok = remove_from_blacklist(phone)
+    if not ok:
+        return jsonify({"error": "Numéro non trouvé"}), 404
+    return jsonify({"status": "ok"})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API — HEURES D'OUVERTURE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/api/hours/")
+@login_required
+def api_get_hours():
+    from webhook_app.database_v21 import get_business_hours, is_business_open
+    hours = get_business_hours()
+    is_open, msg = is_business_open()
+    return jsonify({
+        "hours": hours,
+        "is_open_now": is_open,
+        "closed_message": msg,
+    })
+
+
+@dashboard_v2_bp.put("/api/hours/<int:day>/")
+@login_required
+def api_update_hours(day: int):
+    from webhook_app.database_v21 import update_business_hours
+    body = request.get_json(silent=True) or {}
+    is_open    = bool(body.get("is_open", True))
+    open_time  = (body.get("open_time") or "08:00").strip()
+    close_time = (body.get("close_time") or "20:00").strip()
+    if day not in range(7):
+        return jsonify({"error": "Jour invalide (0-6)"}), 400
+    ok = update_business_hours(day, is_open, open_time, close_time)
+    return jsonify({"status": "ok" if ok else "no_change"})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API — HISTORIQUE ESCALADES
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/api/escalations/")
+@login_required
+def api_get_escalations():
+    from webhook_app.database_v21 import get_escalation_history, get_escalation_stats
+    limit  = min(int(request.args.get("limit", 50)), 100)
+    offset = int(request.args.get("offset", 0))
+    history = get_escalation_history(limit=limit, offset=offset)
+    stats   = get_escalation_stats()
+    for row in history:
+        _serialize_datetimes(row)
+    return jsonify({
+        "escalations": history,
+        "stats": stats,
+        "count": len(history),
+    })
 # ══════════════════════════════════════════════════════════════════════════════
 # API — PROMPTS SYSTÈME
 # ══════════════════════════════════════════════════════════════════════════════
@@ -436,34 +550,44 @@ def api_get_prompts():
 @dashboard_v2_bp.put("/api/prompts/<key>/")
 @login_required
 def api_update_prompt(key: str):
-    """
-    Met à jour un prompt système.
-    NOTE : Dans cette v1, les prompts sont mis à jour en mémoire.
-    Pour une persistance complète, migrer vers une table DB system_prompts.
-    """
     body = request.get_json(silent=True) or {}
     content = body.get("content", "").strip()
 
     if not content:
         return jsonify({"error": "Contenu vide"}), 400
 
-    # Mise à jour en mémoire — persistance DB à implémenter en v2.1
-    if key == "base":
-        import webhook_app.conversation.context_builder as cb
-        cb.BASE_SYSTEM_PROMPT = content
-        logger.info("Prompt base mis à jour en mémoire")
-    else:
-        import webhook_app.llm.prompts as p
-        if key not in p.STATE_PROMPTS:
-            return jsonify({"error": f"Clé inconnue : {key}"}), 404
-        p.STATE_PROMPTS[key] = content
-        logger.info("Prompt état '%s' mis à jour en mémoire", key)
+    from webhook_app.database_v21 import upsert_prompt
+    from webhook_app.conversation.context_builder import BASE_SYSTEM_PROMPT
+    from webhook_app.llm.prompts import STATE_PROMPTS
+
+    # Définir le label
+    labels = {
+        "base": "Prompt système de base",
+        "new_prospect": "Nouveau prospect",
+        "interested_lead": "Prospect intéressé",
+        "pre_sale": "Pre-sale",
+        "payment_failed": "Paiement échoué",
+        "payment_abandoned": "Paiement abandonné",
+        "payment_success": "Achat réussi",
+        "post_sale": "Post-sale",
+        "support": "Support",
+        "escalation": "Escalade",
+    }
+    label = labels.get(key, key)
+
+    try:
+        ok = upsert_prompt(key, label, content)
+        if not ok:
+            return jsonify({"error": "Sauvegarde DB échouée"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    logger.info("Prompt '%s' sauvegardé en DB", key)
 
     return jsonify({
         "status": "ok",
         "key": key,
-        "message": "Prompt mis à jour (session courante)",
-        "warning": "Persistance DB non encore implémentée — reset au redémarrage",
+        "message": "Prompt sauvegardé en base de données",
     })
 
 

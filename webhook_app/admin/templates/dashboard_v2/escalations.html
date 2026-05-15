@@ -1,0 +1,256 @@
+{% extends "dashboard_v2/base.html" %}
+
+{% block title %}Historique escalades{% endblock %}
+
+{% block topbar %}
+<div class="topbar">
+  <div>
+    <span class="topbar-title">Historique escalades</span>
+    <span class="topbar-sub" id="escSubtitle">Chargement...</span>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-ghost btn-sm" onclick="loadEscalations()">
+      <i class="ti ti-refresh"></i> Actualiser
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Stats -->
+<div class="stats-grid" id="escStats">
+  <div class="stat-card red skeleton"    style="height:72px;"></div>
+  <div class="stat-card amber skeleton"  style="height:72px;"></div>
+  <div class="stat-card green skeleton"  style="height:72px;"></div>
+  <div class="stat-card blue skeleton"   style="height:72px;"></div>
+</div>
+
+<!-- Filtres -->
+<div class="filter-row" style="margin-top:20px;">
+  <button class="chip active" data-filter="">Toutes</button>
+  <button class="chip" data-filter="pending"
+    style="border-color:rgba(239,159,39,0.3);color:var(--amber);">En attente</button>
+  <button class="chip" data-filter="reprise"
+    style="border-color:rgba(30,111,217,0.3);color:var(--blue-light);">IA reprise</button>
+  <button class="chip" data-filter="resolu"
+    style="border-color:rgba(29,158,117,0.3);color:var(--green);">Résolues</button>
+  <button class="chip" data-filter="pause"
+    style="border-color:rgba(136,153,170,0.3);color:var(--text-secondary);">Pause</button>
+</div>
+
+<!-- Liste -->
+<div id="escList" style="margin-top:12px;">
+  {% for i in range(4) %}
+  <div class="skeleton" style="height:80px;border-radius:10px;margin-bottom:8px;"></div>
+  {% endfor %}
+</div>
+
+<!-- Modal détail -->
+<div class="modal-overlay" id="modalDetail">
+  <div class="modal-box" style="width:520px;">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="detailTitle">Détail escalade</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;" id="detailSub">—</div>
+      </div>
+      <button class="btn-icon" onclick="closeModal('modalDetail')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body" id="detailBody">
+      <!-- Contenu dynamique -->
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalDetail')">Fermer</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var allEscalations = [];
+var currentFilter = '';
+
+var RESOLUTION_LABELS = {
+  pending:  { label:'En attente', cls:'badge-amber', icon:'ti-clock' },
+  reprise:  { label:'IA reprise', cls:'badge-blue',  icon:'ti-robot' },
+  resolu:   { label:'Résolu',     cls:'badge-green', icon:'ti-check' },
+  pause:    { label:'Pause',      cls:'badge-gray',  icon:'ti-player-pause' },
+};
+
+async function loadEscalations() {
+  try {
+    var data = await api('GET', '/dashboard/v2/api/escalations/?limit=100');
+    allEscalations = data.escalations || [];
+    renderStats(data.stats || {});
+    renderList(allEscalations);
+    document.getElementById('escSubtitle').textContent =
+      '— ' + (data.stats.total || 0) + ' escalades · ' + (data.stats.pending || 0) + ' en attente';
+  } catch(e) {
+    showToast('Erreur chargement escalades', 'error');
+  }
+}
+
+function renderStats(s) {
+  document.getElementById('escStats').innerHTML = `
+    <div class="stat-card red">
+      <div class="stat-label">Total escalades</div>
+      <div class="stat-value">${s.total || 0}</div>
+      <div class="stat-hint">Depuis le début</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-label">En attente</div>
+      <div class="stat-value">${s.pending || 0}</div>
+      <div class="stat-delta ${s.pending > 0 ? 'down' : 'neutral'}">${s.pending > 0 ? 'Intervention requise' : 'Aucune en cours'}</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Résolues</div>
+      <div class="stat-value">${s.resolved || 0}</div>
+      <div class="stat-hint">Marquées résolues</div>
+    </div>
+    <div class="stat-card blue">
+      <div class="stat-label">Durée moyenne</div>
+      <div class="stat-value" style="font-size:16px;">${s.avg_duration_min ? s.avg_duration_min + ' min' : '—'}</div>
+      <div class="stat-hint">Temps de résolution</div>
+    </div>
+  `;
+}
+
+function renderList(items) {
+  var filtered = currentFilter
+    ? items.filter(function(i) { return i.resolution === currentFilter; })
+    : items;
+
+  if (!filtered.length) {
+    document.getElementById('escList').innerHTML = `
+      <div style="text-align:center;padding:48px;color:var(--text-muted);">
+        <i class="ti ti-alert-triangle" style="font-size:36px;display:block;margin-bottom:10px;opacity:.3;"></i>
+        <div style="font-size:13px;">Aucune escalade trouvée</div>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('escList').innerHTML = filtered.map(function(esc) {
+    var res = RESOLUTION_LABELS[esc.resolution] || { label: esc.resolution, cls:'badge-gray', icon:'ti-question-mark' };
+    var date = esc.escalated_at ? new Date(esc.escalated_at).toLocaleString('fr-FR') : '—';
+    var duration = esc.duration_minutes ? Math.round(esc.duration_minutes) + ' min' : '—';
+    var msg = (esc.trigger_message || '').substring(0, 80);
+    var isPending = esc.resolution === 'pending';
+    var accentColor = isPending ? 'var(--amber)' : 'var(--border)';
+
+    return `
+    <div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:var(--bg-elevated);
+                border:0.5px solid var(--border);border-left:3px solid ${accentColor};
+                border-radius:10px;margin-bottom:8px;cursor:pointer;transition:all .2s;"
+         onclick="openDetail('${esc.id}')" onmouseover="this.style.borderColor='var(--blue)'"
+         onmouseout="this.style.borderColor='var(--border)';this.style.borderLeftColor='${accentColor}'">
+
+      <div style="width:38px;height:38px;border-radius:50%;background:rgba(226,75,74,0.1);
+                  display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <i class="ti ti-alert-triangle" style="font-size:17px;color:var(--red);"></i>
+      </div>
+
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <span style="font-size:12px;font-weight:600;color:var(--text-primary);font-family:var(--font-mono);">
+            ${esc.phone || '—'}
+          </span>
+          ${esc.product_id ? `<span class="badge badge-gray" style="font-size:10px;">${esc.product_id}</span>` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          "${escapeHtml(msg)}"
+        </div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">
+          <i class="ti ti-clock" style="font-size:11px;margin-right:2px;"></i>${date}
+          ${esc.duration_minutes ? `· <i class="ti ti-hourglass" style="font-size:11px;margin-right:2px;"></i>${duration}` : ''}
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
+        <span class="badge ${res.cls}">
+          <i class="ti ${res.icon}"></i>
+          ${res.label}
+        </span>
+        ${isPending ? `
+        <span style="font-size:10px;color:var(--amber);animation:pulse-badge 1.5s infinite;">
+          ● Intervention requise
+        </span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openDetail(id) {
+  var esc = allEscalations.find(function(e) { return e.id === id; });
+  if (!esc) return;
+
+  var res = RESOLUTION_LABELS[esc.resolution] || { label: esc.resolution, cls:'badge-gray', icon:'ti-question-mark' };
+
+  document.getElementById('detailTitle').textContent = 'Escalade — ' + (esc.phone || '—');
+  document.getElementById('detailSub').textContent = esc.escalated_at
+    ? new Date(esc.escalated_at).toLocaleString('fr-FR') : '—';
+
+  document.getElementById('detailBody').innerHTML = `
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+      <span class="badge ${res.cls}"><i class="ti ${res.icon}"></i> ${res.label}</span>
+      ${esc.product_id ? `<span class="badge badge-gray">${esc.product_id}</span>` : ''}
+      ${esc.duration_minutes ? `<span class="badge badge-gray"><i class="ti ti-hourglass"></i> ${Math.round(esc.duration_minutes)} min</span>` : ''}
+    </div>
+
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:8px;">
+      Message déclencheur
+    </div>
+    <div style="background:var(--bg-elevated);border:0.5px solid var(--border);border-radius:8px;padding:12px;
+                font-size:13px;color:var(--text-primary);line-height:1.6;margin-bottom:16px;">
+      "${escapeHtml(esc.trigger_message || '—')}"
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <tr style="border-bottom:0.5px solid var(--border);">
+        <td style="padding:8px 0;color:var(--text-muted);width:40%;">Conversation ID</td>
+        <td style="padding:8px 0;color:var(--text-primary);font-family:var(--font-mono);font-size:11px;">
+          ${esc.conversation_id || '—'}
+        </td>
+      </tr>
+      <tr style="border-bottom:0.5px solid var(--border);">
+        <td style="padding:8px 0;color:var(--text-muted);">Escaladé le</td>
+        <td style="padding:8px 0;color:var(--text-primary);">
+          ${esc.escalated_at ? new Date(esc.escalated_at).toLocaleString('fr-FR') : '—'}
+        </td>
+      </tr>
+      <tr style="border-bottom:0.5px solid var(--border);">
+        <td style="padding:8px 0;color:var(--text-muted);">Résolu le</td>
+        <td style="padding:8px 0;color:var(--text-primary);">
+          ${esc.resolved_at ? new Date(esc.resolved_at).toLocaleString('fr-FR') : '—'}
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px 0;color:var(--text-muted);">Durée résolution</td>
+        <td style="padding:8px 0;color:var(--text-primary);">
+          ${esc.duration_minutes ? Math.round(esc.duration_minutes) + ' minutes' : 'En cours...'}
+        </td>
+      </tr>
+    </table>
+  `;
+
+  openModal('modalDetail');
+}
+
+/* Filtres */
+document.querySelectorAll('.chip').forEach(function(chip) {
+  chip.addEventListener('click', function() {
+    document.querySelectorAll('.chip').forEach(function(c) { c.classList.remove('active'); });
+    chip.classList.add('active');
+    currentFilter = chip.dataset.filter || '';
+    renderList(allEscalations);
+  });
+});
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+document.addEventListener('DOMContentLoaded', loadEscalations);
+</script>
+{% endblock %}

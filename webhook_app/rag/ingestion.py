@@ -20,6 +20,7 @@ from typing import Optional
 
 from webhook_app.rag.embedder import embed_batch
 from webhook_app.database_conv import insert_chunk, delete_chunks_for_product
+from webhook_app.database_v21 import save_kb_source, get_all_kb_sources
 
 logger = logging.getLogger(__name__)
 
@@ -157,29 +158,37 @@ def split_into_chunks(text: str, source: str) -> list[dict]:
 # PIPELINE D'INGESTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def ingest_product(product_id: str, *, force: bool = False) -> dict:
+def ingest_product(product_id: str, *, force: bool = False, text_override: str | None = None) -> dict:
     """
     Ingère le document d'un produit dans la knowledge base.
-
-    - Lit knowledge_base/products/{product_id}.md
-    - Découpe en chunks
-    - Génère les embeddings en batch
-    - Supprime les anciens chunks du produit (si force=True ou premier import)
-    - Insère les nouveaux chunks
-
-    Retourne un résumé : { product_id, chunks_created, status }
+    text_override : texte déjà extrait (depuis upload dashboard) — bypass lecture fichier.
     """
-    md_path = KB_DIR / f"{product_id}.md"
-
-    if not md_path.exists():
-        logger.error("Fichier introuvable : %s", md_path)
-        return {"product_id": product_id, "chunks_created": 0, "status": "file_not_found"}
+    # ── Source du texte ───────────────────────────────────────────
+    if text_override:
+        # Texte fourni directement (upload dashboard)
+        text = text_override
+        source = f"{product_id}_upload"
+    else:
+        # Lecture depuis le filesystem
+        md_path = KB_DIR / f"{product_id}.md"
+        if not md_path.exists():
+            logger.error("Fichier introuvable : %s", md_path)
+            return {"product_id": product_id, "chunks_created": 0, "status": "file_not_found"}
+        text = md_path.read_text(encoding="utf-8")
+        source = md_path.name
 
     logger.info("Ingestion de %s...", product_id)
 
-    # Lecture du document
-    text = md_path.read_text(encoding="utf-8")
-    source = md_path.name
+    # ── Sauvegarder la source en DB ───────────────────────────────
+    try:
+        save_kb_source(
+            product_id=product_id,
+            filename=source,
+            content=text,
+        )
+        logger.info("Source KB sauvegardée en DB : %s / %s", product_id, source)
+    except Exception as e:
+        logger.warning("Sauvegarde KB source échouée (non bloquant) : %s", e)
 
     # Découpage
     chunks = split_into_chunks(text, source)
@@ -218,7 +227,6 @@ def ingest_product(product_id: str, *, force: bool = False) -> dict:
     logger.info("Ingestion terminée : %d chunks créés pour %s", created, product_id)
     return {"product_id": product_id, "chunks_created": created, "status": "ok"}
 
-
 def ingest_all(*, force: bool = False) -> list[dict]:
     """
     Ingère tous les fichiers .md présents dans knowledge_base/products/.
@@ -244,6 +252,38 @@ def ingest_all(*, force: bool = False) -> list[dict]:
     logger.info("Ingestion complète : %d chunks créés sur %d produits.", total, len(results))
     return results
 
+def ingest_all_from_db(*, force: bool = False) -> list[dict]:
+    """
+    Réingère tous les produits depuis les sources stockées en DB.
+    Utilisé après un redémarrage Render pour reconstruire les chunks
+    sans accès au filesystem.
+    """
+    sources = get_all_kb_sources()
+    if not sources:
+        logger.warning("Aucune source KB en DB — fallback sur filesystem")
+        return ingest_all(force=force)
+
+    logger.info("%d sources KB trouvées en DB", len(sources))
+
+    # Grouper par product_id et concaténer les fichiers
+    from collections import defaultdict
+    by_product: dict[str, list[str]] = defaultdict(list)
+    for src in sources:
+        by_product[src["product_id"]].append(src["content"])
+
+    results = []
+    for product_id, contents in by_product.items():
+        combined_text = "\n\n".join(contents)
+        result = ingest_product(
+            product_id,
+            force=force,
+            text_override=combined_text,
+        )
+        results.append(result)
+
+    total = sum(r["chunks_created"] for r in results)
+    logger.info("Réingestion DB complète : %d chunks sur %d produits", total, len(results))
+    return results
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI

@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # PROMPT SYSTÈME DE BASE
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# PROMPT SYSTÈME DE BASE — avec fallback DB
+# ══════════════════════════════════════════════════════════════════════════════
+
 BASE_SYSTEM_PROMPT = """Tu es l'assistant commercial et support de Digitech Hub, \
 une boutique en ligne spécialisée dans les formations digitales, logiciels et outils \
 pour entrepreneurs et professionnels en Afrique francophone.
@@ -63,12 +67,34 @@ IMPORTANT : ne pose AUCUNE question supplémentaire après le tag.
 Ne demande pas d'email, de numéro de commande ou d'autres informations.
 Le message doit se terminer après la phrase de réassurance.
 
-
 ## Format des réponses
 - Maximum 3-4 phrases par message WhatsApp
 - Si tu dois donner plusieurs informations, utilise des listes courtes
 - Termine toujours par une question ou une invitation à continuer si pertinent
 """
+
+
+def _load_prompt(key: str, fallback: str) -> str:
+    """
+    Charge un prompt depuis la DB.
+    Si absent ou erreur → retourne le fallback en dur.
+    """
+    try:
+        from webhook_app.database_v21 import get_prompt
+        db_content = get_prompt(key)
+        if db_content:
+            logger.debug("Prompt '%s' chargé depuis DB", key)
+            return db_content
+    except Exception as e:
+        logger.warning("Impossible de charger prompt '%s' depuis DB : %s", key, e)
+    return fallback
+
+
+def get_base_prompt() -> str:
+    """Retourne le prompt de base — DB en priorité, fallback en dur."""
+    return _load_prompt("base", BASE_SYSTEM_PROMPT)
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -175,35 +201,33 @@ class ContextBuilder:
     ) -> dict:
         product_id = conversation.get("product_id")
 
-        # ── Query RAG enrichie avec le contexte récent ────────────────
-        # Pour les messages courts ou ambigus, on ajoute le dernier
-        # message utilisateur précédent pour donner du contexte au RAG
+        # ── Query RAG enrichie ────────────────────────────────────────
         rag_query = user_message
         if len(user_message.strip().split()) <= 6:
-            # Chercher le dernier message user dans l'historique
             prev_user_msgs = [
                 m["content"] for m in history
                 if m.get("role") == "user"
                 and m.get("content") != user_message
             ]
             if prev_user_msgs:
-                # Prendre le plus récent
                 rag_query = f"{prev_user_msgs[-1]} {user_message}"
 
         # ── 1. Contexte RAG ───────────────────────────────────────────
         rag_context, chunk_ids = build_rag_context(
-            query=rag_query,  # ← query enrichie
+            query=rag_query,
             product_id=product_id,
             top_k=Config.RAG_TOP_K,
             min_score=Config.RAG_MIN_SCORE,
         )
-      
 
-        # ── 2. Contexte transactionnel ────────────────────────────────────
+        # ── 2. Contexte transactionnel ────────────────────────────────
         transaction_context = _build_transaction_context(conversation)
 
-        # ── 3. Assemblage du prompt système ──────────────────────────────
-        system_parts = [BASE_SYSTEM_PROMPT]
+        # ── 3. Prompt de base — DB en priorité, fallback en dur ───────
+        base_prompt = get_base_prompt()
+
+        # ── 4. Assemblage du prompt système ──────────────────────────
+        system_parts = [base_prompt]
 
         if transaction_context:
             system_parts.append("\n" + transaction_context)
@@ -218,9 +242,7 @@ class ContextBuilder:
 
         system_prompt = "\n".join(system_parts)
 
-        # ── 4. Historique des messages au format LLM ──────────────────────
-        # On exclut les messages system de l'historique
-        # (ils sont déjà dans le system_prompt)
+        # ── 5. Historique messages ────────────────────────────────────
         llm_messages = []
         for msg in history:
             role = msg.get("role")
@@ -240,5 +262,5 @@ class ContextBuilder:
         return {
             "system_prompt": system_prompt,
             "messages": llm_messages,
-            "chunk_ids": chunk_ids,  # Pour logging dans save_message
+            "chunk_ids": chunk_ids,
         }

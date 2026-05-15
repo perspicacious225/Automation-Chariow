@@ -57,14 +57,17 @@ class ConversationManager:
 
         Flux :
         1. Idempotence — message déjà traité ?
-        2. Récupérer / créer la conversation
-        3. IA active ? Sinon → log et stop
-        4. Sauvegarder le message utilisateur
-        5. Construire le contexte LLM
-        6. Appeler le LLM
-        7. Sauvegarder la réponse assistant
-        8. Envoyer via WhatsApp
-        9. Mettre à jour l'état si nécessaire
+        2. Blacklist — numéro bloqué ?
+        3. Récupérer / créer la conversation
+        4. IA active ? Sinon → log et stop
+        5. Heures d'ouverture — on est ouvert ?
+        6. Sauvegarder le message utilisateur
+        7. Construire le contexte LLM
+        8. Appeler le LLM / escalade immédiate
+        9. Sauvegarder la réponse assistant
+        10. Envoyer via WhatsApp
+        11. Escalade automatique
+        12. Transition d'état
         """
 
         # 1. Idempotence
@@ -72,7 +75,17 @@ class ConversationManager:
             logger.info("Message déjà traité, ignoré : %s", wa_message_id)
             return
 
-        # 2. Récupérer / créer la conversation
+        # 2. Blacklist
+        from webhook_app.database_v21 import (
+            is_blacklisted,
+            is_business_open,
+            log_escalation,
+        )
+        if is_blacklisted(phone):
+            logger.warning("Numéro blacklisté — message ignoré : %s", phone)
+            return
+
+        # 3. Récupérer / créer la conversation
         conversation = get_or_create_conversation(
             phone=phone,
             initial_state="new_prospect",
@@ -86,7 +99,7 @@ class ConversationManager:
             conv_id, current_state, ai_active,
         )
 
-        # 3. IA désactivée → humain en main, on log uniquement
+        # 4. IA désactivée → humain en main, on log uniquement
         if not ai_active:
             logger.info(
                 "IA désactivée sur conversation %s — message loggé sans réponse auto.",
@@ -101,7 +114,33 @@ class ConversationManager:
             )
             return
 
-        # 4. Sauvegarder le message utilisateur
+        # 5. Heures d'ouverture
+        is_open, closed_msg = is_business_open()
+        if not is_open:
+            logger.info("Hors heures d'ouverture — message automatique envoyé à %s", phone)
+            save_message(
+                conv_id,
+                role="user",
+                content=text,
+                wa_message_id=wa_message_id,
+            )
+            save_message(
+                conv_id,
+                role="assistant",
+                content=closed_msg,
+                metadata={"source": "business_hours"},
+            )
+            try:
+                _wa.send_message_direct(
+                    chatId=phone,
+                    message=closed_msg,
+                    conv_id=conv_id,
+                )
+            except Exception as e:
+                logger.exception("Erreur envoi message fermé pour %s : %s", phone, e)
+            return
+
+        # 6. Sauvegarder le message utilisateur
         save_message(
             conv_id,
             role="user",
@@ -109,7 +148,7 @@ class ConversationManager:
             wa_message_id=wa_message_id,
         )
 
-        # 5. Construire le contexte LLM
+        # 7. Construire le contexte LLM
         history = fetch_history(conv_id)
         context = self.context_builder.build(
             conversation=conversation,
@@ -117,7 +156,7 @@ class ConversationManager:
             user_message=text,
         )
 
-        # Vérifier escalade immédiate avant le LLM
+        # 8. Escalade immédiate ou appel LLM
         if self.state_machine.should_escalate(text):
             logger.info("Escalade immédiate détectée avant LLM")
             response_text = (
@@ -128,7 +167,7 @@ class ConversationManager:
             escalade_requise = True
 
         else:
-            # 6. Appeler le LLM
+            # Appeler le LLM
             try:
                 response_text, chunk_ids = self.llm_engine.generate(
                     system_prompt=context["system_prompt"],
@@ -142,7 +181,7 @@ class ConversationManager:
                 )
                 chunk_ids = []
 
-            # ── Détecter escalade via tag LLM ─────────────────────────
+            # Détecter escalade via tag LLM
             escalade_requise = "[ESCALADE_REQUISE]" in response_text
 
         logger.info("=== ESCALADE CHECK ===")
@@ -151,8 +190,8 @@ class ConversationManager:
         logger.info("======================")
 
         response_clean = re.sub(r'\[ESCALADE_REQUISE\]', '', response_text).strip()
-       
-        # 7. Sauvegarder la réponse assistant
+
+        # 9. Sauvegarder la réponse assistant
         save_message(
             conv_id,
             role="assistant",
@@ -163,7 +202,7 @@ class ConversationManager:
             },
         )
 
-        # 8. Envoyer via WhatsApp
+        # 10. Envoyer via WhatsApp
         try:
             _wa.send_message_direct(
                 chatId=phone,
@@ -173,13 +212,21 @@ class ConversationManager:
         except Exception as e:
             logger.exception("Erreur envoi WhatsApp pour %s : %s", phone, e)
 
-        # 9. Gérer l'escalade automatique
+        # 11. Escalade automatique + log
         if escalade_requise:
             logger.info("→ Déclenchement _handle_escalade pour conv=%s phone=%s", conv_id, phone)
+            # Enregistrer dans escalation_log
+            log_escalation(
+                conversation_id=conv_id,
+                phone=phone,
+                trigger_message=text,
+                product_id=conversation.get("product_id"),
+            )
             _handle_escalade(conv_id, phone, response_clean)
         else:
             logger.info("→ Pas d'escalade détectée")
-        # 10. Transition d'état
+
+        # 12. Transition d'état
         new_state = self.state_machine.transition(
             current_state=current_state,
             user_message=text,

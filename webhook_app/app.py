@@ -283,6 +283,52 @@ def create_app():
             return jsonify({"error": "Internal server error"}), 500
         # ──────────────────────────────────────────────────────────────────────
 
+    with app.app_context():
+        try:
+            from webhook_app.database_v21 import init_default_prompts
+            from webhook_app.conversation.context_builder import BASE_SYSTEM_PROMPT
+            from webhook_app.llm.prompts import STATE_PROMPTS
+
+            default_prompts = {
+                "base": {
+                    "label": "Prompt système de base",
+                    "content": BASE_SYSTEM_PROMPT,
+                }
+            }
+
+            # Ajouter tous les prompts d'état
+            state_labels = {
+                "new_prospect":      "Nouveau prospect",
+                "interested_lead":   "Prospect intéressé",
+                "pre_sale":          "Pre-sale",
+                "payment_failed":    "Paiement échoué",
+                "payment_abandoned": "Paiement abandonné",
+                "payment_success":   "Achat réussi",
+                "post_sale":         "Post-sale",
+                "support":           "Support",
+                "escalation":        "Escalade",
+            }
+
+            for key, label in state_labels.items():
+                content = STATE_PROMPTS.get(key, "")
+                if content:
+                    default_prompts[key] = {
+                        "label": label,
+                        "content": content,
+                    }
+
+            init_default_prompts(default_prompts)
+
+        except Exception as e:
+            logger.warning("Init prompts DB échouée : %s", e)
+    with app.app_context():
+        try:
+            from webhook_app.rag.ingestion import ingest_all_from_db
+            ingest_all_from_db()
+            logger.info("KB réingérée depuis DB au démarrage")
+        except Exception as e:
+            logger.warning("Réingestion KB au démarrage échouée : %s", e)
+
     app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
     app.register_blueprint(dashboard_v2_bp)
     app.register_blueprint(inbound_bp)

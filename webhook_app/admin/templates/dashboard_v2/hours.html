@@ -1,0 +1,179 @@
+{% extends "dashboard_v2/base.html" %}
+
+{% block title %}Heures d'ouverture{% endblock %}
+
+{% block topbar %}
+<div class="topbar">
+  <div>
+    <span class="topbar-title">Heures d'ouverture</span>
+    <span class="topbar-sub" id="hoursStatus">Chargement...</span>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-ghost btn-sm" onclick="loadHours()">
+      <i class="ti ti-refresh"></i> Actualiser
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Statut actuel -->
+<div id="currentStatus" style="margin-bottom:20px;">
+  <div class="skeleton" style="height:56px;border-radius:10px;"></div>
+</div>
+
+<!-- Grille des jours -->
+<div style="font-size:13px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:6px;margin-bottom:12px;">
+  <i class="ti ti-calendar-time" style="font-size:16px;color:var(--text-muted);"></i>
+  Configuration par jour
+</div>
+
+<div id="hoursGrid" style="display:flex;flex-direction:column;gap:8px;">
+  {% for i in range(7) %}
+  <div class="skeleton" style="height:64px;border-radius:10px;"></div>
+  {% endfor %}
+</div>
+
+<!-- Message de fermeture -->
+<div style="margin-top:20px;">
+  <div style="font-size:13px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:6px;margin-bottom:12px;">
+    <i class="ti ti-message" style="font-size:16px;color:var(--text-muted);"></i>
+    Message de fermeture
+    <span style="font-size:11px;color:var(--text-muted);font-weight:400;">— envoyé automatiquement hors horaires</span>
+  </div>
+  <div id="closedMsgPreview" class="card" style="padding:14px 16px;font-size:13px;color:var(--text-secondary);font-style:italic;">
+    Chargement...
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var DAY_NAMES = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
+var hoursData = [];
+
+async function loadHours() {
+  try {
+    var data = await api('GET', '/dashboard/v2/api/hours/');
+    hoursData = data.hours || [];
+    renderStatus(data.is_open_now, data.closed_message);
+    renderGrid(hoursData);
+    document.getElementById('closedMsgPreview').textContent = data.closed_message || 'Aucun message configuré';
+    document.getElementById('hoursStatus').textContent = data.is_open_now ? '— Ouvert maintenant' : '— Fermé actuellement';
+  } catch(e) {
+    showToast('Erreur chargement heures', 'error');
+  }
+}
+
+function renderStatus(isOpen, msg) {
+  var color = isOpen ? 'var(--green)' : 'var(--amber)';
+  var bg    = isOpen ? 'rgba(29,158,117,0.08)' : 'rgba(239,159,39,0.08)';
+  var border= isOpen ? 'rgba(29,158,117,0.25)' : 'rgba(239,159,39,0.25)';
+  var icon  = isOpen ? 'ti-check' : 'ti-clock';
+  var label = isOpen ? 'Ouvert — l\'IA répond aux messages' : 'Fermé — ' + (msg || 'message automatique activé');
+
+  document.getElementById('currentStatus').innerHTML = `
+    <div style="background:${bg};border:0.5px solid ${border};border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;">
+      <div style="width:36px;height:36px;border-radius:50%;background:${color}20;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <i class="ti ${icon}" style="font-size:18px;color:${color};"></i>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:600;color:#fff;">Statut actuel</div>
+        <div style="font-size:12px;color:${color};margin-top:2px;">${label}</div>
+      </div>
+    </div>`;
+}
+
+function renderGrid(hours) {
+  if (!hours.length) {
+    document.getElementById('hoursGrid').innerHTML = `
+      <div style="text-align:center;padding:32px;color:var(--text-muted);font-size:12px;">
+        Aucune configuration — l'IA répond 24h/24 par défaut
+      </div>`;
+    return;
+  }
+
+  document.getElementById('hoursGrid').innerHTML = hours.map(function(h, idx) {
+    var isToday = new Date().getDay() === (h.day_of_week === 6 ? 0 : h.day_of_week + 1);
+    var todayBorder = isToday ? 'border-color:var(--blue);' : '';
+    var statusColor = h.is_open ? 'var(--green)' : 'var(--red)';
+    var statusLabel = h.is_open ? 'Ouvert' : 'Fermé';
+
+    return `
+    <div style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--bg-elevated);border:0.5px solid var(--border);${todayBorder}border-radius:10px;transition:all .2s;">
+      <div style="width:80px;flex-shrink:0;">
+        <div style="font-size:12px;font-weight:600;color:${isToday ? 'var(--blue-light)' : 'var(--text-primary)'};">
+          ${DAY_NAMES[h.day_of_week]}
+          ${isToday ? '<span style="font-size:10px;color:var(--blue-light);margin-left:4px;">· Aujourd\'hui</span>' : ''}
+        </div>
+      </div>
+
+      <div class="toggle-wrap" onclick="toggleDay(${h.day_of_week}, ${!h.is_open})">
+        <div class="toggle ${h.is_open ? 'on' : 'off'}" id="toggle-${h.day_of_week}">
+          <div class="toggle-dot"></div>
+        </div>
+        <span class="toggle-label" id="toggleLabel-${h.day_of_week}" style="color:${statusColor};">${statusLabel}</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto;" id="timeRow-${h.day_of_week}" style="${!h.is_open ? 'opacity:.4;pointer-events:none;' : ''}">
+        <i class="ti ti-door-enter" style="font-size:14px;color:var(--text-muted);"></i>
+        <input type="time" value="${h.open_time}" id="open-${h.day_of_week}"
+          style="background:var(--bg-base);border:0.5px solid var(--border);border-radius:6px;padding:5px 8px;color:var(--text-primary);font-size:12px;font-family:var(--font-mono);"
+          onchange="saveHours(${h.day_of_week})" />
+        <span style="color:var(--text-muted);font-size:12px;">→</span>
+        <i class="ti ti-door-exit" style="font-size:14px;color:var(--text-muted);"></i>
+        <input type="time" value="${h.close_time}" id="close-${h.day_of_week}"
+          style="background:var(--bg-base);border:0.5px solid var(--border);border-radius:6px;padding:5px 8px;color:var(--text-primary);font-size:12px;font-family:var(--font-mono);"
+          onchange="saveHours(${h.day_of_week})" />
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleDay(day, newState) {
+  var toggle = document.getElementById('toggle-' + day);
+  var label  = document.getElementById('toggleLabel-' + day);
+  var h = hoursData.find(function(x) { return x.day_of_week === day; });
+  if (!h) return;
+
+  try {
+    await api('PUT', '/dashboard/v2/api/hours/' + day + '/', {
+      is_open:    newState,
+      open_time:  h.open_time,
+      close_time: h.close_time,
+    });
+
+    toggle.className = 'toggle ' + (newState ? 'on' : 'off');
+    label.textContent = newState ? 'Ouvert' : 'Fermé';
+    label.style.color = newState ? 'var(--green)' : 'var(--red)';
+    h.is_open = newState;
+    showToast(DAY_NAMES[day] + ' — ' + (newState ? 'Ouvert' : 'Fermé'), 'success');
+    loadHours();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+async function saveHours(day) {
+  var openTime  = document.getElementById('open-' + day).value;
+  var closeTime = document.getElementById('close-' + day).value;
+  var h = hoursData.find(function(x) { return x.day_of_week === day; });
+  if (!h) return;
+
+  try {
+    await api('PUT', '/dashboard/v2/api/hours/' + day + '/', {
+      is_open:    h.is_open,
+      open_time:  openTime,
+      close_time: closeTime,
+    });
+    showToast(DAY_NAMES[day] + ' — horaires mis à jour', 'success');
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadHours);
+</script>
+{% endblock %}

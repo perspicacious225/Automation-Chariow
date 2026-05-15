@@ -160,48 +160,28 @@ def _handle_admin_command(
     text: str,
     wa_message_id: str,
     chat_id: str,
+    is_outgoing: bool = True,
 ) -> None:
-    """
-    Traite une commande admin (#REPRISE, #PAUSE, #RESOLU).
-
-    1. Identifie la conversation cible depuis le phone
-    2. Applique la commande
-    3. Supprime le message tag (invisible pour le client)
-    4. Confirme à l'admin
-    """
     from webhook_app.database_conv import (
         get_conversation_by_phone,
         toggle_ai,
         update_conversation_state,
     )
+    from webhook_app.database_v21 import resolve_escalation
     from webhook_app.services.whatsapp import WhatsAppService
-    
+
     tag = text.strip().upper()
     action = ADMIN_TAGS.get(tag)
     if not action:
         return
 
-    # La commande est envoyée DANS la discussion du client
-    # donc phone = numéro du client (le chat où l'admin a écrit)
-    # Mais en réalité le webhook reçoit phone = numéro admin
-    # Il faut donc récupérer la conversation par un autre moyen
-    # → L'admin envoie le tag dans la discussion avec le client
-    # → Green API nous donne le chatId de la discussion = numéro client
-    # → On cherche la conversation par ce numéro
-
-    # Note : phone ici = numéro de l'expéditeur (admin)
-    # Le chatId de la discussion = numéro du client
-    # On le récupère depuis le payload via senderData.chatId
-    # qui est déjà dans message["phone"] quand c'est une discussion 1:1
-
     wa = WhatsAppService()
 
-    # Supprimer le message tag immédiatement
-    wa.delete_message(chat_id, wa_message_id)
+    # Supprimer le tag uniquement si message sortant
+    if is_outgoing:
+        wa.delete_message(chat_id, wa_message_id)
 
-    # Trouver la conversation liée à ce numéro
-    # Si l'admin écrit dans la discussion d'un client,
-    # le chatId = numéro du client
+    # Trouver la conversation
     conv = get_conversation_by_phone(phone)
     if not conv:
         logger.warning("Commande admin : aucune conversation pour %s", phone)
@@ -215,15 +195,28 @@ def _handle_admin_command(
     if action["state"]:
         update_conversation_state(conv_id, action["state"])
 
+    # ── Résoudre l'escalade dans l'historique ───────────────
+    resolution_map = {
+        "#REPRISE": "reprise",
+        "#PAUSE":   "pause",
+        "#RESOLU":  "resolu",
+    }
+    resolution = resolution_map.get(tag)
+    if resolution:
+        resolved = resolve_escalation(conv_id, resolution)
+        logger.info(
+            "Escalade résolue — conv=%s | resolution=%s | ok=%s",
+            conv_id, resolution, resolved,
+        )
+
     # Confirmation à l'admin
     labels = {
         "#REPRISE": "✅ IA réactivée — le bot reprend la conversation",
         "#PAUSE":   "⏸ IA désactivée — vous êtes en main",
         "#RESOLU":  "✅ Résolu — IA réactivée, état → post_sale",
     }
-    wa.send_to_admin(labels.get(tag, "Commande appliquée"), conv_id=conv_id)
+    wa.send_to_admin(labels.get(tag, "Commande appliquée"))
     logger.info("Commande admin %s appliquée sur conv=%s", tag, conv_id)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ENDPOINT
