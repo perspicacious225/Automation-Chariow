@@ -1,110 +1,330 @@
 {% extends "dashboard/base.html" %}
 {% block title %}{{ "Modifier" if rid else "Nouveau" }} template{% endblock %}
-{% block body_class %}page-templates-edit{% endblock %}
 
 {% block head_extra %}
-  <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
+<style>
+  .tpl-input, .tpl-select, .tpl-textarea {
+    width: 100%;
+    background: #060E1C;
+    border: 0.5px solid #1E3A5F;
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: #E8EDF5;
+    font-size: 12px;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color .2s;
+    font-family: 'Space Grotesk', sans-serif;
+  }
+  .tpl-input:focus, .tpl-select:focus, .tpl-textarea:focus {
+    border-color: #1E6FD9;
+  }
+  .tpl-input::placeholder, .tpl-textarea::placeholder {
+    color: #2A4A6B;
+  }
+  .tpl-select option {
+    background: #0A1628;
+    color: #E8EDF5;
+  }
+  .tpl-textarea {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    resize: vertical;
+    min-height: 280px;
+    line-height: 1.6;
+  }
+  .tpl-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: #4A7FA8;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 6px;
+  }
+  .tpl-field { margin-bottom: 16px; }
+  .check-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #8899AA;
+    transition: color .2s;
+  }
+  .check-label:hover { color: #E8EDF5; }
+  .check-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #1E6FD9;
+    cursor: pointer;
+  }
+  .placeholder-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 9px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    background: rgba(30,111,217,0.08);
+    border: 0.5px solid rgba(41,171,226,0.2);
+    color: #29ABE2;
+    cursor: pointer;
+    transition: all .15s;
+    margin: 2px;
+  }
+  .placeholder-badge:hover {
+    background: rgba(30,111,217,0.18);
+    border-color: rgba(41,171,226,0.4);
+  }
+  .hidden { display: none; }
+</style>
 {% endblock %}
 
 {% block content %}
-  <h1 class="page-title">{{ "Modifier" if rid else "Nouveau" }} template</h1>
 
-  <div class="card form-card">
-    <form method="post" id="tplForm" class="tpl-form">
+<!-- Header -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:12px;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <a href="{{ url_for('dashboard.templates_for_product', id=(product_id or pid_prefill)) if (product_id or pid_prefill) else url_for('dashboard.templates_products') }}"
+       style="width:32px;height:32px;background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:8px;
+              display:flex;align-items:center;justify-content:center;text-decoration:none;
+              color:#8899AA;transition:all .2s;flex-shrink:0;"
+       onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+       onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+      <i class="ti ti-arrow-left" style="font-size:16px;"></i>
+    </a>
+    <div>
+      <h1 style="font-size:20px;font-weight:700;color:#fff;letter-spacing:-0.02em;">
+        {{ "Modifier le template" if rid else "Nouveau template" }}
+      </h1>
+      {% if rid %}
+      <div style="font-size:11px;color:#4A7FA8;margin-top:2px;font-family:'JetBrains Mono',monospace;">
+        ID : {{ rid }}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
 
-      <!-- Ligne 1 : Produit / Type / Canal -->
-      <div class="fields">
-        <div class="field">
-          <label>Produit (ID)</label>
-          <input type="text"
-                 name="product_id"
+<!-- Formulaire -->
+<div style="display:grid;grid-template-columns:1fr 280px;gap:20px;align-items:start;">
+
+  <!-- Colonne principale -->
+  <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:14px;padding:22px;">
+    <form method="post" id="tplForm">
+
+      <!-- Ligne produit / type / canal -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 160px;gap:12px;margin-bottom:16px;">
+        <div class="tpl-field" style="margin-bottom:0;">
+          <label class="tpl-label">Produit (ID)</label>
+          <input type="text" name="product_id" class="tpl-input"
                  value="{{ product_id or pid_prefill or '' }}"
                  placeholder="ex: prd_k3eyyy">
         </div>
-
-        <div class="field">
-          <label>Template type</label>
-          <input list="tplTypes"
-                 type="text"
-                 name="template_type"
-                 value="{{ template_type or '' }}"
-                 required
-                 placeholder="ex: relance_t30, relance_t6h, confirm_3_2">
+        <div class="tpl-field" style="margin-bottom:0;">
+          <label class="tpl-label">Type de template</label>
+          <input list="tplTypes" type="text" name="template_type" class="tpl-input"
+                 value="{{ template_type or '' }}" required
+                 placeholder="ex: relance_t30">
           <datalist id="tplTypes">
             {% for t in suggested_types %}
               <option value="{{ t }}"></option>
             {% endfor %}
           </datalist>
         </div>
-
-        <div class="field">
-          <label>Canal</label>
-          <select name="channel">
-            <option value="email" {{ "selected" if (channel or "email")=="email" else "" }}>email</option>
-            <option value="whatsapp" {{ "selected" if (channel or "email")=="whatsapp" else "" }}>whatsapp</option>
+        <div class="tpl-field" style="margin-bottom:0;">
+          <label class="tpl-label">Canal</label>
+          <select name="channel" class="tpl-select" id="channelSelect" onchange="toggleSubject()">
+            <option value="email" {{ "selected" if (channel or "email")=="email" }}>
+              📧 Email
+            </option>
+            <option value="whatsapp" {{ "selected" if (channel or "email")=="whatsapp" }}>
+              💬 WhatsApp
+            </option>
           </select>
         </div>
       </div>
 
-      <!-- Sujet (email uniquement) -->
-      <div class="field">
-        <label>Sujet (email uniquement)</label>
-        <input type="text"
-               name="subject"
+      <!-- Sujet email -->
+      <div class="tpl-field" id="subjectField"
+          class="{{ 'hidden' if (channel or 'email') == 'whatsapp' else '' }}">
+        <label class="tpl-label">
+          <i class="ti ti-mail" style="font-size:12px;margin-right:3px;"></i>
+          Sujet (email uniquement)
+        </label>
+        <input type="text" name="subject" class="tpl-input"
                value="{{ subject or '' }}"
                placeholder="ex: Un souci avec ta commande ?">
       </div>
 
-      <!-- Corps -->
-      <div class="field">
-        <label>Corps</label>
-        <textarea name="body"
-                  id="bodyArea"
-                  spellcheck="false"
-                  placeholder="HTML complet (si coché) ou fragment HTML (email), texte brut (WhatsApp)">{{ body or '' }}</textarea>
-      </div>
-
-      <!-- Placeholders -->
-      <div class="help muted placeholder-box">
-        <div class="legend">Placeholders disponibles :</div>
-        <div class="badges">
-          <span class="badge">{{ "{{customer_first_name}}" }}</span>
-          <span class="badge">{{ "{{customer_email}}" }}</span>
-          <span class="badge">{{ "{{product_name}}" }}</span>
-          <span class="badge">{{ "{{checkout_url}}" }}</span>
-          <span class="badge">{{ "{{price_current_fmt}}" }}</span>
-          <span class="badge">{{ "{{price_after_fmt}}" }}</span>
-          <span class="badge">{{ "{{store_name}}" }}</span>
-          <span class="badge">{{ "{{store_url}}" }}</span>
-          <span class="badge">{{ "{{sale_id}}" }}</span>
-          <span class="badge">{{ "{{current_year}}" }}</span>
-        </div>
-      </div>
-
-      <!-- Barre d’actions : cases à gauche, boutons à droite -->
-      <div class="actions-bar">
-        <div class="checks">
-          <label class="check">
-            <input type="checkbox" name="is_full_html" {{ "checked" if is_full_html else "" }}>
-            <span>HTML complet (email)</span>
+      <!-- Corps du template -->
+      <div class="tpl-field">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <label class="tpl-label" style="margin-bottom:0;">
+            <i class="ti ti-code" style="font-size:12px;margin-right:3px;"></i>
+            Corps du template
           </label>
-          <label class="check">
-            <input type="checkbox" name="is_active" {{ "checked" if (is_active if is_active is not none else True) else "" }}>
-            <span>Actif</span>
-          </label>
+          <div style="display:flex;gap:6px;">
+            <button type="button" onclick="formatBody()"
+                    style="padding:3px 10px;border-radius:6px;border:0.5px solid #1E3A5F;
+                           background:transparent;color:#8899AA;font-size:10px;cursor:pointer;
+                           font-family:'Space Grotesk',sans-serif;transition:all .2s;"
+                    onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+                    onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+              <i class="ti ti-code" style="font-size:11px;"></i> Formater
+            </button>
+            <span id="charCount" style="font-size:10px;color:#4A7FA8;padding:3px 8px;
+                                        background:rgba(30,111,217,0.08);border-radius:6px;
+                                        border:0.5px solid rgba(30,111,217,0.15);">
+              0 car.
+            </span>
+          </div>
         </div>
-
-        <div class="buttons">
-          <button class="btn primary" type="submit">Enregistrer</button>
-          <button class="btn secondary" type="button" onclick="doPreview()">Prévisualiser</button>
-          <a class="btn ghost"
-             href="{{ url_for('dashboard.templates_for_product', id=(product_id or pid_prefill)) if (product_id or pid_prefill) else url_for('dashboard.templates_products') }}">
-            Annuler
-          </a>
-        </div>
+        <textarea name="body" id="bodyArea" class="tpl-textarea"
+                  placeholder="HTML complet (si coché) ou fragment HTML (email), texte brut (WhatsApp)"
+                  oninput="updateCharCount()">{{ body or '' }}</textarea>
       </div>
+
+      <!-- Cases à cocher -->
+      <div style="display:flex;gap:20px;padding:12px 14px;background:#060E1C;border-radius:8px;
+                  border:0.5px solid #1E3A5F;margin-bottom:18px;flex-wrap:wrap;">
+        <label class="check-label">
+          <input type="checkbox" name="is_full_html" {{ "checked" if is_full_html else "" }}>
+          <span>HTML complet (email)</span>
+        </label>
+        <label class="check-label">
+          <input type="checkbox" name="is_active"
+                 {{ "checked" if (is_active if is_active is not none else True) else "" }}>
+          <span>Template actif</span>
+        </label>
+      </div>
+
+      <!-- Boutons -->
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button type="submit"
+                style="display:flex;align-items:center;gap:8px;padding:10px 20px;border-radius:8px;
+                       background:linear-gradient(135deg,#1E6FD9,#29ABE2);border:none;
+                       color:#fff;font-size:13px;font-weight:600;cursor:pointer;
+                       font-family:'Space Grotesk',sans-serif;transition:opacity .2s;"
+                onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+          <i class="ti ti-device-floppy" style="font-size:16px;"></i>
+          Enregistrer
+        </button>
+        <button type="button" onclick="doPreview()"
+                style="display:flex;align-items:center;gap:8px;padding:10px 20px;border-radius:8px;
+                       background:rgba(30,111,217,0.1);border:0.5px solid rgba(30,111,217,0.3);
+                       color:#29ABE2;font-size:13px;font-weight:500;cursor:pointer;
+                       font-family:'Space Grotesk',sans-serif;transition:all .2s;"
+                onmouseover="this.style.background='rgba(30,111,217,0.2)'"
+                onmouseout="this.style.background='rgba(30,111,217,0.1)'">
+          <i class="ti ti-eye" style="font-size:16px;"></i>
+          Prévisualiser
+        </button>
+        <a href="{{ url_for('dashboard.templates_for_product', id=(product_id or pid_prefill)) if (product_id or pid_prefill) else url_for('dashboard.templates_products') }}"
+           style="display:flex;align-items:center;gap:8px;padding:10px 20px;border-radius:8px;
+                  background:transparent;border:0.5px solid #1E3A5F;
+                  color:#8899AA;font-size:13px;font-weight:500;text-decoration:none;transition:all .2s;"
+           onmouseover="this.style.borderColor='#4A7FA8';this.style.color='#E8EDF5'"
+           onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+          Annuler
+        </a>
+      </div>
+
     </form>
   </div>
+
+  <!-- Colonne latérale — placeholders -->
+  <div style="position:sticky;top:20px;">
+    <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:14px;padding:18px;">
+      <div style="font-size:11px;font-weight:600;color:#4A7FA8;text-transform:uppercase;
+                  letter-spacing:.06em;margin-bottom:12px;display:flex;align-items:center;gap:6px;">
+        <i class="ti ti-braces" style="font-size:13px;"></i>
+        Placeholders
+      </div>
+      <div style="font-size:11px;color:#4A7FA8;margin-bottom:10px;">
+        Cliquez pour insérer dans le corps
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px;">
+        {% set placeholders = [
+          'customer_first_name', 'customer_email', 'product_name',
+          'checkout_url', 'price_current_fmt', 'price_after_fmt',
+          'store_name', 'store_url', 'sale_id', 'current_year'
+        ] %}
+        {% for ph in placeholders %}
+        <span class="placeholder-badge" onclick="insertPlaceholder('{{ ph }}')">
+          {{ '{{' }}{{ ph }}{{ '}}' }}
+        </span>
+        {% endfor %}
+      </div>
+
+      <!-- Aide canal -->
+      <div style="margin-top:16px;padding:10px;background:#060E1C;border-radius:8px;border:0.5px solid #1E3A5F;">
+        <div style="font-size:10px;font-weight:600;color:#4A7FA8;text-transform:uppercase;
+                    letter-spacing:.06em;margin-bottom:8px;">
+          Format par canal
+        </div>
+        <div style="font-size:11px;color:#8899AA;display:flex;flex-direction:column;gap:6px;">
+          <div>
+            <span style="color:#29ABE2;font-weight:600;">📧 Email</span>
+            <div style="margin-top:2px;">HTML fragment ou HTML complet (si coché)</div>
+          </div>
+          <div>
+            <span style="color:#1D9E75;font-weight:600;">💬 WhatsApp</span>
+            <div style="margin-top:2px;">Texte brut, *gras*, _italique_</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function toggleSubject() {
+  var ch = document.getElementById('channelSelect').value;
+  var sf = document.getElementById('subjectField');
+  sf.style.display = ch === 'email' ? '' : 'none';
+}
+
+function updateCharCount() {
+  var ta = document.getElementById('bodyArea');
+  document.getElementById('charCount').textContent = ta.value.length + ' car.';
+}
+
+function insertPlaceholder(name) {
+  var ta = document.getElementById('bodyArea');
+  var val = '{{' + name + '}}';
+  var start = ta.selectionStart;
+  var end = ta.selectionEnd;
+  ta.value = ta.value.substring(0, start) + val + ta.value.substring(end);
+  ta.selectionStart = ta.selectionEnd = start + val.length;
+  ta.focus();
+  updateCharCount();
+}
+
+function formatBody() {
+  // Formater basique — indentation HTML
+  var ta = document.getElementById('bodyArea');
+  try {
+    var txt = ta.value;
+    // Ajouter sauts de ligne après balises block
+    txt = txt.replace(/(<\/(div|p|tr|td|th|li|ul|ol|table|thead|tbody|h[1-6]|section|header|footer)>)/gi, '$1\n');
+    txt = txt.replace(/(<(div|p|tr|td|th|li|ul|ol|table|thead|tbody|h[1-6]|section|header|footer)[^>]*>)/gi, '\n$1');
+    // Nettoyer les lignes vides multiples
+    txt = txt.replace(/\n{3,}/g, '\n\n').trim();
+    ta.value = txt;
+    updateCharCount();
+  } catch(e) {}
+}
+
+// Init
+document.addEventListener('DOMContentLoaded', function() {
+  updateCharCount();
+  toggleSubject();
+});
+</script>
+
 {% endblock %}
 
 {% block scripts %}

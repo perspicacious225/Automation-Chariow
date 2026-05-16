@@ -1,46 +1,126 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Résumé des Relances{% endblock %}
-{% block body_class %}page-relances-summary{% endblock %}
-
-{% block head_extra %}
-    <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
-{% endblock %}
 
 {% block content %}
-    <div style="display: flex; justify-content: space-between; margin-top: 15px;margin-bottom: 10px;">
-    <h1 class="page-title">Clients avec Relances Programmées</h1>
-    <a class="btn ghost" href="{{ url_for('dashboard.templates_products') }}">← Retour</a>
-    </div>
- 
 
-    <div class="card">
-        <table class="results-table">
-            <thead>
-                <tr>
-                    <th>Contacts Clients</th>
-                    <th>Nombre de relances</th>
-                    <th>Prochaine relance le</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for contact in contacts %}
-                    <tr>
-                        <td>{{ contact.contact_key }}</td>
-                        <td>{{ contact.relance_count }}</td>
-                        <td>{{ contact.next_relance_at.strftime('%Y-%m-%d %H:%M') if contact.next_relance_at else 'N/A' }}</td>
-                        <td>
-                            <a class="btn primary" href="{{ url_for('dashboard.manage_relances_for_contact', contact_key=contact.contact_key) }}">
-                                Voir les détails
-                            </a>
-                        </td>
-                    </tr>
-                {% else %}
-                    <tr>
-                        <td colspan="4" style="text-align: center; padding: 20px;">🎉 Aucune relance en attente.</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<!-- Header -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:12px;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="width:36px;height:36px;background:linear-gradient(135deg,#1E6FD9,#29ABE2);border-radius:10px;
+                display:flex;align-items:center;justify-content:center;">
+      <i class="ti ti-send" style="font-size:18px;color:#fff;"></i>
     </div>
+    <div>
+      <h1 style="font-size:20px;font-weight:700;color:#fff;letter-spacing:-0.02em;">Relances programmées</h1>
+      <div style="font-size:12px;color:#4A7FA8;margin-top:2px;">
+        {{ contacts|length }} client{{ 's' if contacts|length != 1 }} avec relances en attente
+      </div>
+    </div>
+  </div>
+  <a href="{{ url_for('dashboard.templates_products') }}"
+     style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;
+            background:transparent;border:0.5px solid #1E3A5F;color:#8899AA;
+            font-size:12px;font-weight:500;text-decoration:none;transition:all .2s;"
+     onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+     onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+    <i class="ti ti-arrow-left" style="font-size:14px;"></i> Templates
+  </a>
+</div>
+
+<!-- Barre de recherche -->
+{% if contacts %}
+<div style="position:relative;margin-bottom:16px;max-width:320px;">
+  <i class="ti ti-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);
+     font-size:14px;color:#4A7FA8;pointer-events:none;"></i>
+  <input type="text" id="searchInput" placeholder="Rechercher un contact..."
+         onkeyup="filterContacts(this.value)"
+         style="width:100%;background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:8px;
+                padding:9px 12px 9px 34px;color:#E8EDF5;font-size:12px;
+                outline:none;box-sizing:border-box;transition:border-color .2s;"
+         onfocus="this.style.borderColor='#1E6FD9'" onblur="this.style.borderColor='#1E3A5F'">
+</div>
+{% endif %}
+
+<!-- Liste contacts -->
+{% if contacts %}
+<div id="contactsContainer" style="display:flex;flex-direction:column;gap:8px;">
+  {% for contact in contacts %}
+  <div class="contact-row"
+       data-contact="{{ contact.contact_key }}"
+       style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:12px;
+              padding:14px 18px;display:flex;align-items:center;gap:14px;transition:all .2s;"
+       onmouseover="this.style.borderColor='#1E6FD9'" onmouseout="this.style.borderColor='#1E3A5F'">
+
+    <!-- Avatar -->
+    <div style="width:40px;height:40px;border-radius:50%;
+                background:linear-gradient(135deg,rgba(30,111,217,0.3),rgba(41,171,226,0.2));
+                border:0.5px solid rgba(41,171,226,0.3);
+                display:flex;align-items:center;justify-content:center;flex-shrink:0;
+                font-size:14px;font-weight:700;color:#29ABE2;">
+      {{ contact.contact_key[0]|upper }}
+    </div>
+
+    <!-- Infos contact -->
+    <div style="flex:1;min-width:0;">
+      <div style="font-size:13px;font-weight:600;color:#E8EDF5;margin-bottom:3px;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        {{ contact.contact_key }}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:11px;color:#4A7FA8;display:flex;align-items:center;gap:4px;">
+          <i class="ti ti-send" style="font-size:11px;"></i>
+          {{ contact.relance_count }} relance{{ 's' if contact.relance_count > 1 }}
+        </span>
+        {% if contact.next_relance_at %}
+        <span style="font-size:11px;color:#EF9F27;display:flex;align-items:center;gap:4px;">
+          <i class="ti ti-clock" style="font-size:11px;"></i>
+          Prochaine : {{ contact.next_relance_at.strftime('%d/%m/%Y %H:%M') }}
+        </span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Badge count -->
+    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+      <div style="padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;
+                  background:rgba(30,111,217,0.12);border:0.5px solid rgba(41,171,226,0.2);color:#29ABE2;">
+        {{ contact.relance_count }}
+      </div>
+      <a href="{{ url_for('dashboard.manage_relances_for_contact', contact_key=contact.contact_key) }}"
+         style="display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;
+                background:linear-gradient(135deg,#1E6FD9,#29ABE2);
+                color:#fff;font-size:12px;font-weight:600;text-decoration:none;transition:opacity .2s;white-space:nowrap;"
+         onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+        <i class="ti ti-eye" style="font-size:14px;"></i> Détails
+      </a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<!-- État vide -->
+<div style="text-align:center;padding:72px 32px;background:#0D1F3C;
+            border:0.5px dashed #1E3A5F;border-radius:16px;">
+  <div style="font-size:40px;margin-bottom:14px;">🎉</div>
+  <div style="font-size:16px;font-weight:600;color:#E8EDF5;margin-bottom:6px;">
+    Aucune relance en attente
+  </div>
+  <div style="font-size:12px;color:#4A7FA8;">
+    Tous les clients ont été relancés ou aucune relance n'est programmée
+  </div>
+</div>
+{% endif %}
+
+<script>
+function filterContacts(query) {
+  var rows = document.querySelectorAll('.contact-row');
+  var q = query.toLowerCase().trim();
+  rows.forEach(function(row) {
+    var contact = (row.dataset.contact || '').toLowerCase();
+    row.style.display = (!q || contact.includes(q)) ? 'flex' : 'none';
+  });
+}
+</script>
+
 {% endblock %}

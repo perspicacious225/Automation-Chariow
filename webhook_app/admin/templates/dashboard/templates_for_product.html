@@ -2,49 +2,192 @@
 {% block title %}Templates — {{ product_name }}{% endblock %}
 
 {% block content %}
-  <h1>Templates — {{ product_name }}</h1>
 
-  <div class="actions">
-    <a class="btn secondary" href="{{ url_for('dashboard.templates_products') }}">← Retour produits</a>
-    <a class="btn" href="{{ url_for('dashboard.edit_template', pid=pid) }}">+ Nouveau template</a>
+{% block head_extra %}
+<style>
+  .canal-email { background: rgba(30,111,217,0.12); }
+  .canal-wa    { background: rgba(29,158,117,0.12); }
+  .icon-email  { font-size:20px; color:#29ABE2; }
+  .icon-wa     { font-size:20px; color:#1D9E75; }
+  .badge-active   { background:rgba(29,158,117,0.1); border:0.5px solid rgba(29,158,117,0.3); color:#1D9E75; }
+  .badge-inactive { background:rgba(136,153,170,0.1); border:0.5px solid rgba(136,153,170,0.2); color:#8899AA; }
+</style>
+{% endblock %}
+<!-- Page header -->
+<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;gap:16px;flex-wrap:wrap;">
+  <div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+      <a href="{{ url_for('dashboard.templates_products') }}"
+         style="width:32px;height:32px;background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:8px;
+                display:flex;align-items:center;justify-content:center;text-decoration:none;
+                color:#8899AA;transition:all .2s;flex-shrink:0;"
+         onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+         onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+        <i class="ti ti-arrow-left" style="font-size:16px;"></i>
+      </a>
+      <div>
+        <h1 style="font-size:20px;font-weight:700;color:#fff;letter-spacing:-0.02em;line-height:1.2;">
+          {{ product_name }}
+        </h1>
+        <div style="font-size:11px;color:#4A7FA8;font-family:'JetBrains Mono',monospace;margin-top:2px;">
+          {{ pid }}
+        </div>
+      </div>
+    </div>
   </div>
+  <a href="{{ url_for('dashboard.edit_template', pid=pid) }}"
+     style="display:flex;align-items:center;gap:8px;padding:9px 16px;border-radius:8px;
+            background:linear-gradient(135deg,#1E6FD9,#29ABE2);
+            color:#fff;font-size:12px;font-weight:600;text-decoration:none;transition:all .2s;white-space:nowrap;"
+     onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+    <i class="ti ti-plus" style="font-size:16px;"></i> Nouveau template
+  </a>
+</div>
 
-  <div class="card">
-    <table>
-      <thead>
-        <tr>
-          <th>Type</th>
-          <th>Canal</th>
-          <th>HTML complet</th>
-          <th>Statut</th>
-          <th>Modifié</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in templates %}
-          <tr>
-            <td><code>{{ r.template_type }}</code></td>
-            <td>{{ r.channel }}</td>
-            <td>{{ 'Oui' if r.is_full_html else 'Non' }}</td>
-            <td>{{ 'actif' if r.is_active else 'inactif' }}</td>
-            <td class="muted">{{ r.updated_at or '' }}</td>
-            <td style="white-space:nowrap">
-              <a class="btn" href="{{ url_for('dashboard.preview_template') }}?id={{ r.id }}" target="_blank">Prévisualiser</a>
-              <a class="btn" href="{{ url_for('dashboard.edit_template', id=r.id) }}">Éditer</a>
-              <form method="post"
-                    action="{{ url_for('dashboard.delete_template_post') }}"
-                    style="display:inline"
-                    onsubmit="return confirm('Supprimer ce template ?');">
-                <input type="hidden" name="id" value="{{ r.id }}">
-                <button class="btn danger" type="submit">Supprimer</button>
-              </form>
-            </td>
-          </tr>
-        {% else %}
-          <tr><td colspan="6" class="muted">Aucun template pour ce produit</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<!-- Filtres canal -->
+<div style="display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap;">
+  <button onclick="filterTemplates('all')" id="filter-all"
+          style="padding:6px 14px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;
+                 border:0.5px solid #1E6FD9;background:rgba(30,111,217,0.15);color:#29ABE2;transition:all .2s;">
+    Tous
+  </button>
+  <button onclick="filterTemplates('email')" id="filter-email"
+          style="padding:6px 14px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;
+                 border:0.5px solid #1E3A5F;background:transparent;color:#8899AA;transition:all .2s;">
+    <i class="ti ti-mail" style="font-size:12px;margin-right:3px;"></i> Email
+  </button>
+  <button onclick="filterTemplates('whatsapp')" id="filter-whatsapp"
+          style="padding:6px 14px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;
+                 border:0.5px solid #1E3A5F;background:transparent;color:#8899AA;transition:all .2s;">
+    <i class="ti ti-brand-whatsapp" style="font-size:12px;margin-right:3px;"></i> WhatsApp
+  </button>
+</div>
+
+<!-- Liste templates -->
+{% if templates %}
+<div id="templatesContainer" style="display:flex;flex-direction:column;gap:8px;">
+  {% for r in templates %}
+  <div class="tpl-row" data-channel="{{ r.channel }}"
+       style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:12px;
+              padding:16px 18px;transition:all .2s;display:flex;align-items:center;gap:14px;"
+       onmouseover="this.style.borderColor='#1E6FD9'" onmouseout="this.style.borderColor='#1E3A5F'">
+
+    <!-- Icône canal -->
+    <div style="width:42px;height:42px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;"
+     class="{{ 'canal-email' if r.channel == 'email' else 'canal-wa' }}">
+      <i class="ti {{ 'ti-mail icon-email' if r.channel == 'email' else 'ti-brand-whatsapp icon-wa' }}"></i>
+    </div>
+
+    <!-- Infos template -->
+    <div style="flex:1;min-width:0;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
+        <code style="font-size:12px;font-weight:600;color:#E8EDF5;background:rgba(30,111,217,0.1);
+                     padding:2px 8px;border-radius:4px;border:0.5px solid rgba(41,171,226,0.2);">
+          {{ r.template_type }}
+        </code>
+        <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:500;"
+              class="{{ 'badge-active' if r.is_active else 'badge-inactive' }}">
+          <i class="ti {{ 'ti-circle-check' if r.is_active else 'ti-circle-x' }}" style="font-size:11px;"></i>
+          {{ 'Actif' if r.is_active else 'Inactif' }}
+        </span>
+        {% if r.is_full_html %}
+        <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:12px;
+                     font-size:10px;font-weight:500;
+                     background:rgba(239,159,39,0.1);border:0.5px solid rgba(239,159,39,0.25);color:#EF9F27;">
+          <i class="ti ti-code" style="font-size:11px;"></i> HTML complet
+        </span>
+        {% endif %}
+      </div>
+      <div style="font-size:11px;color:#4A7FA8;">
+        <i class="ti ti-clock" style="font-size:11px;margin-right:3px;"></i>
+        Modifié {{ r.updated_at or '—' }}
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+      <a href="{{ url_for('dashboard.preview_template') }}?id={{ r.id }}" target="_blank"
+         title="Prévisualiser"
+         style="width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+                background:rgba(30,111,217,0.08);border:0.5px solid rgba(30,111,217,0.2);
+                color:#29ABE2;text-decoration:none;transition:all .2s;"
+         onmouseover="this.style.background='rgba(30,111,217,0.18)'"
+         onmouseout="this.style.background='rgba(30,111,217,0.08)'">
+        <i class="ti ti-eye" style="font-size:15px;"></i>
+      </a>
+      <a href="{{ url_for('dashboard.edit_template', id=r.id) }}"
+         title="Éditer"
+         style="width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+                background:rgba(239,159,39,0.08);border:0.5px solid rgba(239,159,39,0.2);
+                color:#EF9F27;text-decoration:none;transition:all .2s;"
+         onmouseover="this.style.background='rgba(239,159,39,0.18)'"
+         onmouseout="this.style.background='rgba(239,159,39,0.08)'">
+        <i class="ti ti-edit" style="font-size:15px;"></i>
+      </a>
+      <form method="post" action="{{ url_for('dashboard.delete_template_post') }}"
+            style="margin:0;" onsubmit="return confirm('Supprimer ce template ?');">
+        <input type="hidden" name="id" value="{{ r.id }}">
+        <button type="submit" title="Supprimer"
+                style="width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+                       background:rgba(226,75,74,0.08);border:0.5px solid rgba(226,75,74,0.2);
+                       color:#E24B4A;cursor:pointer;transition:all .2s;"
+                onmouseover="this.style.background='rgba(226,75,74,0.18)'"
+                onmouseout="this.style.background='rgba(226,75,74,0.08)'">
+          <i class="ti ti-trash" style="font-size:15px;"></i>
+        </button>
+      </form>
+    </div>
   </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<!-- État vide -->
+<div style="text-align:center;padding:64px 32px;background:#0D1F3C;border:0.5px dashed #1E3A5F;border-radius:16px;">
+  <div style="width:56px;height:56px;background:rgba(30,111,217,0.1);border-radius:14px;
+              display:flex;align-items:center;justify-content:center;margin:0 auto 14px;">
+    <i class="ti ti-template" style="font-size:28px;color:#1E6FD9;opacity:.5;"></i>
+  </div>
+  <div style="font-size:15px;font-weight:600;color:#E8EDF5;margin-bottom:6px;">
+    Aucun template pour ce produit
+  </div>
+  <div style="font-size:12px;color:#4A7FA8;margin-bottom:20px;">
+    Créez votre premier template de relance
+  </div>
+  <a href="{{ url_for('dashboard.edit_template', pid=pid) }}"
+     style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:8px;
+            background:linear-gradient(135deg,#1E6FD9,#29ABE2);
+            color:#fff;font-size:13px;font-weight:600;text-decoration:none;">
+    <i class="ti ti-plus"></i> Créer un template
+  </a>
+</div>
+{% endif %}
+
+<script>
+function filterTemplates(canal) {
+  var rows = document.querySelectorAll('.tpl-row');
+  rows.forEach(function(row) {
+    if (canal === 'all' || row.dataset.channel === canal) {
+      row.style.display = 'flex';
+    } else {
+      row.style.display = 'none';
+    }
+  });
+
+  // Mettre à jour les boutons filtres
+  ['all','email','whatsapp'].forEach(function(c) {
+    var btn = document.getElementById('filter-' + c);
+    if (c === canal) {
+      btn.style.borderColor = '#1E6FD9';
+      btn.style.background = 'rgba(30,111,217,0.15)';
+      btn.style.color = '#29ABE2';
+    } else {
+      btn.style.borderColor = '#1E3A5F';
+      btn.style.background = 'transparent';
+      btn.style.color = '#8899AA';
+    }
+  });
+}
+</script>
+
 {% endblock %}

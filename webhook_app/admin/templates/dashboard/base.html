@@ -367,20 +367,24 @@
     </div>
   </a>
 
-  <nav class="topbar-nav">
-    <a href="/dashboard/" class="nav-link {% if request.endpoint == 'dashboard.index' %}active{% endif %}">
-      <i class="ti ti-chart-bar"></i> KPIs
-    </a>
-    <a href="/dashboard/relances/" class="nav-link {% if 'relance' in request.endpoint %}active{% endif %}">
-      <i class="ti ti-send"></i> Relances
-    </a>
-    <a href="/dashboard/templates-products/" class="nav-link {% if 'template' in request.endpoint %}active{% endif %}">
-      <i class="ti ti-template"></i> Templates
-    </a>
-    <a href="/dashboard/mappings/" class="nav-link {% if 'mapping' in request.endpoint %}active{% endif %}">
-      <i class="ti ti-link"></i> Mappings
-    </a>
-  </nav>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('dashboard.dashboard_view') }}"
+        class="nav-link {% if request.endpoint == 'dashboard.dashboard_view' %}active{% endif %}">
+        <i class="ti ti-chart-bar"></i> KPIs
+      </a>
+      <a href="{{ url_for('dashboard.manage_relances_summary') }}"
+        class="nav-link {% if 'relance' in (request.endpoint or '') %}active{% endif %}">
+        <i class="ti ti-send"></i> Relances
+      </a>
+      <a href="{{ url_for('dashboard.templates_products') }}"
+        class="nav-link {% if 'template' in (request.endpoint or '') %}active{% endif %}">
+        <i class="ti ti-template"></i> Templates
+      </a>
+      <a href="{{ url_for('dashboard.manage_mappings') }}"
+        class="nav-link {% if 'mapping' in (request.endpoint or '') %}active{% endif %}">
+        <i class="ti ti-link"></i> Mappings
+      </a>
+    </nav>
 
   <div class="topbar-right">
     <!-- Bouton vers Dashboard v2 -->

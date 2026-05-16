@@ -1,60 +1,136 @@
 {% extends "dashboard/base.html" %}
-{% block title %}Détail des Relances pour {{ contact_key }}{% endblock %}
-{% block body_class %}page-relances-detail{% endblock %}
-
-{% block head_extra %}
-    <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
-{% endblock %}
+{% block title %}Relances — {{ contact_key }}{% endblock %}
 
 {% block content %}
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h1 class="page-title">Relances pour : {{ contact_key }}</h1>
-        <a class="btn ghost" href="{{ url_for('dashboard.manage_relances_summary') }}">← Retour à la liste</a>
-    </div>
 
-    <div class="card">
-        <table class="results-table">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Produit</th>
-                    <th>Template</th>
-                    <th style="width: 25%;">Prévu pour le (éditable)</th>
-                    <th style="width: 20%;">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for relance in relances %}
-                    <tr>
-                        <form method="post" action="{{ url_for('dashboard.manage_relances_for_contact', contact_key=contact_key) }}">
-                            <input type="hidden" name="job_id" value="{{ relance.id }}">
-                            
-                            <td>{{ relance.id }}</td>
-                            <td>{{ relance.product_id or 'N/A' }}</td>
-                            <td>{{ relance.template_type }}</td>
-                            <td>
-                                <input type="datetime-local" 
-                                       class="form-control"
-                                       name="due_at_{{ relance.id }}" 
-                                       value="{{ relance.due_at.strftime('%Y-%m-%dT%H:%M') if relance.due_at else '' }}">
-                            </td>
-                            <td>
-                                <button type="submit" name="action" value="update" class="btn primary small">
-                                    Enregistrer
-                                </button>
-                                <button type="submit" name="action" value="delete" class="btn ghost danger small" 
-                                        formnovalidate onclick="return confirm('Êtes-vous sûr de vouloir annuler cette relance ?');">
-                                    Annuler
-                                </button>
-                            </td>
-                        </form>
-                    </tr>
-                {% else %}
-                     <tr>
-                        <td colspan="5" style="text-align: center; padding: 20px;">Aucune relance en attente pour ce client.</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<!-- Header -->
+<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:12px;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <a href="{{ url_for('dashboard.manage_relances_summary') }}"
+       style="width:32px;height:32px;background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:8px;
+              display:flex;align-items:center;justify-content:center;text-decoration:none;
+              color:#8899AA;transition:all .2s;flex-shrink:0;"
+       onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+       onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+      <i class="ti ti-arrow-left" style="font-size:16px;"></i>
+    </a>
+    <div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+        <div style="width:32px;height:32px;border-radius:50%;
+                    background:linear-gradient(135deg,rgba(30,111,217,0.3),rgba(41,171,226,0.2));
+                    border:0.5px solid rgba(41,171,226,0.3);
+                    display:flex;align-items:center;justify-content:center;
+                    font-size:13px;font-weight:700;color:#29ABE2;flex-shrink:0;">
+          {{ contact_key[0]|upper }}
+        </div>
+        <h1 style="font-size:18px;font-weight:700;color:#fff;letter-spacing:-0.01em;">{{ contact_key }}</h1>
+      </div>
+      <div style="font-size:12px;color:#4A7FA8;margin-left:40px;">
+        {{ relances|length }} relance{{ 's' if relances|length != 1 }} en attente
+      </div>
     </div>
+  </div>
+</div>
+
+<!-- Liste relances -->
+{% if relances %}
+<div style="display:flex;flex-direction:column;gap:10px;">
+  {% for relance in relances %}
+  <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:12px;
+              padding:16px 18px;transition:border-color .2s;"
+       onmouseover="this.style.borderColor='#1E6FD9'" onmouseout="this.style.borderColor='#1E3A5F'">
+
+    <form method="post" action="{{ url_for('dashboard.manage_relances_for_contact', contact_key=contact_key) }}">
+      <input type="hidden" name="job_id" value="{{ relance.id }}">
+
+      <div style="display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;">
+
+        <!-- Icône -->
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(30,111,217,0.1);
+                    display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <i class="ti ti-send" style="font-size:18px;color:#29ABE2;"></i>
+        </div>
+
+        <!-- Infos -->
+        <div style="flex:1;min-width:200px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+            <code style="font-size:11px;font-weight:600;color:#29ABE2;background:rgba(30,111,217,0.1);
+                         padding:2px 8px;border-radius:4px;border:0.5px solid rgba(41,171,226,0.2);">
+              {{ relance.template_type }}
+            </code>
+            {% if relance.product_id %}
+            <span style="font-size:11px;color:#8899AA;background:rgba(136,153,170,0.1);
+                         padding:2px 8px;border-radius:4px;border:0.5px solid rgba(136,153,170,0.15);">
+              {{ relance.product_id }}
+            </span>
+            {% endif %}
+            <span style="font-size:10px;color:#4A7FA8;font-family:'JetBrains Mono',monospace;">
+              #{{ relance.id }}
+            </span>
+          </div>
+
+          <!-- Date éditable -->
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <label style="font-size:11px;font-weight:600;color:#4A7FA8;
+                          text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;">
+              <i class="ti ti-calendar" style="font-size:12px;margin-right:3px;"></i>
+              Prévu le
+            </label>
+            <input type="datetime-local"
+                   name="due_at_{{ relance.id }}"
+                   value="{{ relance.due_at.strftime('%Y-%m-%dT%H:%M') if relance.due_at else '' }}"
+                   style="background:#060E1C;border:0.5px solid #1E3A5F;border-radius:8px;
+                          padding:7px 10px;color:#E8EDF5;font-size:12px;font-family:'JetBrains Mono',monospace;
+                          outline:none;transition:border-color .2s;"
+                   onfocus="this.style.borderColor='#1E6FD9'" onblur="this.style.borderColor='#1E3A5F'">
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;margin-top:4px;">
+          <button type="submit" name="action" value="update"
+                  style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;
+                         background:linear-gradient(135deg,#1E6FD9,#29ABE2);border:none;
+                         color:#fff;font-size:12px;font-weight:600;cursor:pointer;
+                         font-family:'Space Grotesk',sans-serif;transition:opacity .2s;white-space:nowrap;"
+                  onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+            <i class="ti ti-device-floppy" style="font-size:14px;"></i>
+            Enregistrer
+          </button>
+          <button type="submit" name="action" value="delete" formnovalidate
+                  onclick="return confirm('Annuler cette relance ?');"
+                  style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;
+                         background:rgba(226,75,74,0.08);border:0.5px solid rgba(226,75,74,0.25);
+                         color:#E24B4A;font-size:12px;font-weight:500;cursor:pointer;
+                         font-family:'Space Grotesk',sans-serif;transition:all .2s;white-space:nowrap;"
+                  onmouseover="this.style.background='rgba(226,75,74,0.18)'"
+                  onmouseout="this.style.background='rgba(226,75,74,0.08)'">
+            <i class="ti ti-x" style="font-size:14px;"></i>
+            Annuler
+          </button>
+        </div>
+      </div>
+
+    </form>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<!-- État vide -->
+<div style="text-align:center;padding:64px 32px;background:#0D1F3C;
+            border:0.5px dashed #1E3A5F;border-radius:16px;">
+  <div style="width:56px;height:56px;background:rgba(29,158,117,0.1);border-radius:14px;
+              display:flex;align-items:center;justify-content:center;margin:0 auto 14px;">
+    <i class="ti ti-check" style="font-size:28px;color:#1D9E75;"></i>
+  </div>
+  <div style="font-size:15px;font-weight:600;color:#E8EDF5;margin-bottom:6px;">
+    Aucune relance en attente
+  </div>
+  <div style="font-size:12px;color:#4A7FA8;">
+    Ce client n'a plus de relances programmées
+  </div>
+</div>
+{% endif %}
+
 {% endblock %}

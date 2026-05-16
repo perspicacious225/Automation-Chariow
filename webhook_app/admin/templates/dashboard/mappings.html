@@ -1,79 +1,165 @@
 {% extends "dashboard/base.html" %}
-{% block title %}Gestion des Mappings Drive{% endblock %}
-{% block body_class %}page-mappings{% endblock %}
-
-{% block head_extra %}
-    <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='templates.css') }}">
-{% endblock %}
+{% block title %}Mappings Drive{% endblock %}
 
 {% block content %}
-    <h1 class="page-title">Gestion des Mappings Produit - Drive</h1>
 
-    <div class="content-wrapper" style="max-width: 900px; margin: 2em auto;">
+<!-- Header -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:12px;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="width:36px;height:36px;background:linear-gradient(135deg,#1E6FD9,#29ABE2);border-radius:10px;
+                display:flex;align-items:center;justify-content:center;">
+      <i class="ti ti-link" style="font-size:18px;color:#fff;"></i>
+    </div>
+    <div>
+      <h1 style="font-size:20px;font-weight:700;color:#fff;letter-spacing:-0.02em;">Mappings Drive</h1>
+      <div style="font-size:12px;color:#4A7FA8;margin-top:2px;">Association produits → dossiers Google Drive</div>
+    </div>
+  </div>
+  <a href="{{ url_for('dashboard.templates_products') }}"
+     style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;
+            background:transparent;border:0.5px solid #1E3A5F;color:#8899AA;
+            font-size:12px;font-weight:500;text-decoration:none;transition:all .2s;"
+     onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+     onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+    <i class="ti ti-arrow-left" style="font-size:14px;"></i> Retour Templates
+  </a>
+</div>
 
-        <div class="card form-card">
-            <h2>Ajouter un nouveau mapping</h2>
-            <form method="post" action="{{ url_for('dashboard.manage_mappings') }}" class="tpl-form">
-                <input type="hidden" name="action" value="add">
+<div style="display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start;">
 
-                <div class="fields">
-                    <div class="field">
-                        <label for="product_id">ID du Produit</label>
-                        <input type="text" id="product_id" name="product_id" placeholder="ex: prd_k3eyyy" required>
-                    </div>
+  <!-- Formulaire ajout -->
+  <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:14px;padding:20px;position:sticky;top:20px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;">
+      <div style="width:28px;height:28px;background:rgba(30,111,217,0.15);border-radius:7px;
+                  display:flex;align-items:center;justify-content:center;">
+        <i class="ti ti-plus" style="font-size:14px;color:#29ABE2;"></i>
+      </div>
+      <span style="font-size:13px;font-weight:600;color:#E8EDF5;">Nouveau mapping</span>
+    </div>
 
-                    <div class="field">
-                        <label for="folder_id">ID du Dossier Google Drive</label>
-                        <input type="text" id="folder_id" name="folder_id" placeholder="ex: 1ImA88zoenVS7r8TpDuyVAXvhjz1P19vc" required>
-                    </div>
-                </div>
+    <form method="post" action="{{ url_for('dashboard.manage_mappings') }}">
+      <input type="hidden" name="action" value="add">
 
-                <div class="buttons" style="display: flex; justify-content: space-between; margin-top: 10px;">
-                    <button class="btn primary" type="submit">Ajouter le Mapping</button>
-                    <a class="btn ghost" href="{{ url_for('dashboard.templates_products') }}">Retour</a>
-                </div>
+      <div style="margin-bottom:14px;">
+        <label style="display:block;font-size:11px;font-weight:600;color:#4A7FA8;
+                      text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">
+          ID du produit
+        </label>
+        <input type="text" name="product_id" placeholder="ex: prd_k3eyyy" required
+               style="width:100%;background:#060E1C;border:0.5px solid #1E3A5F;border-radius:8px;
+                      padding:9px 12px;color:#E8EDF5;font-size:12px;font-family:'JetBrains Mono',monospace;
+                      outline:none;box-sizing:border-box;transition:border-color .2s;"
+               onfocus="this.style.borderColor='#1E6FD9'" onblur="this.style.borderColor='#1E3A5F'">
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <label style="display:block;font-size:11px;font-weight:600;color:#4A7FA8;
+                      text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">
+          ID du dossier Google Drive
+        </label>
+        <input type="text" name="folder_id" placeholder="ex: 1ImA88zoenVS7r8..." required
+               style="width:100%;background:#060E1C;border:0.5px solid #1E3A5F;border-radius:8px;
+                      padding:9px 12px;color:#E8EDF5;font-size:12px;font-family:'JetBrains Mono',monospace;
+                      outline:none;box-sizing:border-box;transition:border-color .2s;"
+               onfocus="this.style.borderColor='#1E6FD9'" onblur="this.style.borderColor='#1E3A5F'">
+        <div style="font-size:11px;color:#4A7FA8;margin-top:5px;">
+          <i class="ti ti-info-circle" style="font-size:12px;"></i>
+          Trouvez l'ID dans l'URL Google Drive
+        </div>
+      </div>
+
+      <button type="submit"
+              style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;
+                     padding:10px;border-radius:8px;border:none;cursor:pointer;
+                     background:linear-gradient(135deg,#1E6FD9,#29ABE2);
+                     color:#fff;font-size:13px;font-weight:600;font-family:'Space Grotesk',sans-serif;
+                     transition:opacity .2s;"
+              onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+        <i class="ti ti-link" style="font-size:16px;"></i>
+        Ajouter le mapping
+      </button>
+    </form>
+  </div>
+
+  <!-- Liste mappings -->
+  <div>
+    <div style="font-size:13px;font-weight:600;color:#E8EDF5;display:flex;align-items:center;
+                gap:8px;margin-bottom:12px;">
+      <i class="ti ti-database" style="font-size:16px;color:#4A7FA8;"></i>
+      Mappings actuels
+      <span style="font-size:11px;color:#4A7FA8;font-weight:400;">
+        — {% set total = mappings.values() | sum(attribute='__len__') %}{{ total }} mapping{{ 's' if total != 1 }}
+      </span>
+    </div>
+
+    {% set has_mappings = mappings.values() | list | length > 0 %}
+    {% if has_mappings %}
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        {% for product_id, folder_ids in mappings.items() %}
+          {% for folder_id in folder_ids %}
+          <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:12px;
+                      padding:14px 16px;display:flex;align-items:center;gap:14px;transition:all .2s;"
+               onmouseover="this.style.borderColor='#1E6FD9'" onmouseout="this.style.borderColor='#1E3A5F'">
+
+            <!-- Icône -->
+            <div style="width:38px;height:38px;border-radius:10px;background:rgba(30,111,217,0.1);
+                        display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              <i class="ti ti-brand-google-drive" style="font-size:19px;color:#29ABE2;"></i>
+            </div>
+
+            <!-- Infos -->
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
+                <code style="font-size:11px;font-weight:600;color:#29ABE2;background:rgba(30,111,217,0.1);
+                             padding:2px 8px;border-radius:4px;border:0.5px solid rgba(41,171,226,0.2);">
+                  {{ product_id }}
+                </code>
+                <i class="ti ti-arrow-right" style="font-size:12px;color:#4A7FA8;"></i>
+                <code style="font-size:10px;color:#8899AA;font-family:'JetBrains Mono',monospace;
+                             white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;"
+                      title="{{ folder_id }}">
+                  {{ folder_id[:28] }}{% if folder_id|length > 28 %}...{% endif %}
+                </code>
+              </div>
+              <a href="https://drive.google.com/drive/folders/{{ folder_id }}" target="_blank"
+                 style="font-size:10px;color:#4A7FA8;text-decoration:none;display:flex;align-items:center;gap:3px;"
+                 onmouseover="this.style.color='#29ABE2'" onmouseout="this.style.color='#4A7FA8'">
+                <i class="ti ti-external-link" style="font-size:11px;"></i>
+                Ouvrir dans Drive
+              </a>
+            </div>
+
+            <!-- Supprimer -->
+            <form method="post" action="{{ url_for('dashboard.manage_mappings') }}" style="margin:0;flex-shrink:0;"
+                  onsubmit="return confirm('Supprimer ce mapping ?');">
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="product_id" value="{{ product_id }}">
+              <input type="hidden" name="folder_id" value="{{ folder_id }}">
+              <button type="submit"
+                      style="width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+                             background:rgba(226,75,74,0.08);border:0.5px solid rgba(226,75,74,0.2);
+                             color:#E24B4A;cursor:pointer;transition:all .2s;"
+                      onmouseover="this.style.background='rgba(226,75,74,0.18)'"
+                      onmouseout="this.style.background='rgba(226,75,74,0.08)'">
+                <i class="ti ti-trash" style="font-size:15px;"></i>
+              </button>
             </form>
+          </div>
+          {% endfor %}
+        {% endfor %}
+      </div>
+
+    {% else %}
+      <div style="text-align:center;padding:48px 32px;background:#0D1F3C;
+                  border:0.5px dashed #1E3A5F;border-radius:14px;">
+        <i class="ti ti-link-off" style="font-size:36px;color:#1E6FD9;opacity:.3;display:block;margin-bottom:12px;"></i>
+        <div style="font-size:14px;font-weight:600;color:#E8EDF5;margin-bottom:6px;">Aucun mapping</div>
+        <div style="font-size:12px;color:#4A7FA8;">
+          Associez vos produits à des dossiers Google Drive via le formulaire
         </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
 
-        <div class="card" style="margin-top: 2em;"> {# Ajout d'une marge pour séparer les deux blocs #}
-            <h2>Mappings Actuels</h2>
-            <table class="results-table">
-                <thead>
-                    <tr>
-                        <th>ID du Produit</th>
-                        <th>ID du Dossier Drive</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for product_id, folder_ids in mappings.items() %}
-                        {% for folder_id in folder_ids %}
-                            <tr>
-                                <td>{{ product_id }}</td>
-                                <td>{{ folder_id }}</td>
-                                <td>
-                                    <form method="post" action="{{ url_for('dashboard.manage_mappings') }}" style="display:inline;">
-                                        <input type="hidden" name="action" value="delete">
-                                        <input type="hidden" name="product_id" value="{{ product_id }}">
-                                        <input type="hidden" name="folder_id" value="{{ folder_id }}">
-                                        <button type="submit" class="btn ghost danger" onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce mapping ?');">
-                                            Supprimer
-                                        </button>
-                                    </form>
-                                </td>
-                            </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr>
-                            <td colspan="3" style="text-align: center; padding: 20px;">Aucun mapping trouvé dans la base de données.</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-
-    </div> {% endblock %}
-
-{% block scripts %}
-    {# On peut lier un fichier JS spécifique si besoin #}
 {% endblock %}

@@ -2,52 +2,193 @@
 {% block title %}Templates — par produit{% endblock %}
 
 {% block content %}
-  <h1>Templates — par produit</h1>
-
-  <div class="buttons" style="display: flex; justify-content: space-between; margin: 15px;">
-
-      <a class="btn secondary" href="{{ url_for('dashboard.dashboard_view') }}">← Retour Dashboard</a>
-      <a class="btn ghost" href="{{ url_for('dashboard.manage_relances_summary') }}">gestions des relances</a>
-      <a class="btn ghost" href="{{ url_for('dashboard.manage_mappings') }}">Mappings</a>
-
-      
-
+<!-- Page header -->
+<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;gap:16px;flex-wrap:wrap;">
+  <div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+      <div style="width:36px;height:36px;background:linear-gradient(135deg,#1E6FD9,#29ABE2);border-radius:10px;
+                  display:flex;align-items:center;justify-content:center;">
+        <i class="ti ti-template" style="font-size:18px;color:#fff;"></i>
+      </div>
+      <h1 style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.02em;">Templates</h1>
+    </div>
+    <div style="font-size:12px;color:#4A7FA8;margin-left:46px;">Gestion des templates de relance par produit</div>
   </div>
-
-  <div class="card">
-    <table>
-      <thead>
-        <tr>
-          <th>Produit</th>
-          <th>Templates</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in products %}
-          <tr>
-            <td>{{ p.product_name }}</td>
-            <td>
-              <span class="pill">total: {{ p.nb_tpl }}</span>
-              <span class="pill">email: {{ p.nb_email }}</span>
-              <span class="pill">wa: {{ p.nb_whatsapp }}</span>
-            </td>
-            <td style="white-space:nowrap">
-              <a class="btn" href="{{ url_for('dashboard.templates_for_product', id=p.product_id) }}">Voir</a>
-              <a class="btn secondary" href="{{ url_for('dashboard.edit_template', pid=p.product_id) }}">+ Ajouter un template</a>
-              <form method="post"
-                    action="{{ url_for('dashboard.delete_product_post') }}"
-                    style="display:inline"
-                    onsubmit="return confirm('Supprimer ce produit ET ses templates ?');">
-                <input type="hidden" name="product_id" value="{{ p.product_id }}">
-                <button class="btn danger" type="submit">Supprimer</button>
-              </form>
-            </td>
-          </tr>
-        {% else %}
-          <tr><td colspan="3" class="muted">Aucun produit</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <a href="{{ url_for('dashboard.dashboard_view') }}"
+       style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;
+              background:transparent;border:0.5px solid #1E3A5F;color:#8899AA;
+              font-size:12px;font-weight:500;text-decoration:none;transition:all .2s;"
+       onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+       onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+      <i class="ti ti-arrow-left" style="font-size:14px;"></i> Dashboard
+    </a>
+    <a href="{{ url_for('dashboard.manage_relances_summary') }}"
+       style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;
+              background:transparent;border:0.5px solid #1E3A5F;color:#8899AA;
+              font-size:12px;font-weight:500;text-decoration:none;transition:all .2s;"
+       onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+       onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+      <i class="ti ti-send" style="font-size:14px;"></i> Relances
+    </a>
+    <a href="{{ url_for('dashboard.manage_mappings') }}"
+       style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;
+              background:transparent;border:0.5px solid #1E3A5F;color:#8899AA;
+              font-size:12px;font-weight:500;text-decoration:none;transition:all .2s;"
+       onmouseover="this.style.borderColor='#1E6FD9';this.style.color='#29ABE2'"
+       onmouseout="this.style.borderColor='#1E3A5F';this.style.color='#8899AA'">
+      <i class="ti ti-link" style="font-size:14px;"></i> Mappings
+    </a>
   </div>
+</div>
+
+<!-- Stats rapides -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:24px;">
+  <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-left:3px solid #1E6FD9;
+              border-radius:10px;padding:14px 16px;">
+    <div style="font-size:10px;color:#4A7FA8;text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:6px;">
+      Produits
+    </div>
+    <div style="font-size:24px;font-weight:700;color:#fff;font-family:'JetBrains Mono',monospace;">
+      {{ products|length }}
+    </div>
+  </div>
+  <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-left:3px solid #1D9E75;
+              border-radius:10px;padding:14px 16px;">
+    <div style="font-size:10px;color:#4A7FA8;text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:6px;">
+      Total templates
+    </div>
+    <div style="font-size:24px;font-weight:700;color:#fff;font-family:'JetBrains Mono',monospace;">
+      {{ products|sum(attribute='nb_tpl') }}
+    </div>
+  </div>
+  <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-left:3px solid #29ABE2;
+              border-radius:10px;padding:14px 16px;">
+    <div style="font-size:10px;color:#4A7FA8;text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:6px;">
+      Email
+    </div>
+    <div style="font-size:24px;font-weight:700;color:#fff;font-family:'JetBrains Mono',monospace;">
+      {{ products|sum(attribute='nb_email') }}
+    </div>
+  </div>
+  <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-left:3px solid #00D4FF;
+              border-radius:10px;padding:14px 16px;">
+    <div style="font-size:10px;color:#4A7FA8;text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:6px;">
+      WhatsApp
+    </div>
+    <div style="font-size:24px;font-weight:700;color:#fff;font-family:'JetBrains Mono',monospace;">
+      {{ products|sum(attribute='nb_whatsapp') }}
+    </div>
+  </div>
+</div>
+
+<!-- Grille produits -->
+{% if products %}
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;">
+  {% for p in products %}
+  <div style="background:#0D1F3C;border:0.5px solid #1E3A5F;border-radius:12px;
+              padding:18px;transition:all .2s;position:relative;overflow:hidden;"
+       onmouseover="this.style.borderColor='#1E6FD9';this.style.transform='translateY(-2px)'"
+       onmouseout="this.style.borderColor='#1E3A5F';this.style.transform='translateY(0)'">
+
+    <!-- Accent top -->
+    <div style="position:absolute;top:0;left:0;right:0;height:2px;
+                background:linear-gradient(90deg,#1E6FD9,#29ABE2);opacity:0.6;"></div>
+
+    <!-- Header produit -->
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:38px;height:38px;border-radius:10px;background:rgba(30,111,217,0.12);
+                    display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <i class="ti ti-package" style="font-size:18px;color:#29ABE2;"></i>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:600;color:#E8EDF5;line-height:1.3;">
+            {{ p.product_name }}
+          </div>
+          <div style="font-size:10px;color:#4A7FA8;font-family:'JetBrains Mono',monospace;margin-top:2px;">
+            {{ p.product_id }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats templates -->
+    <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;">
+      <span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;
+                   border-radius:20px;font-size:11px;font-weight:500;
+                   background:rgba(30,111,217,0.1);border:0.5px solid rgba(41,171,226,0.2);color:#29ABE2;">
+        <i class="ti ti-files" style="font-size:12px;"></i>
+        {{ p.nb_tpl }} total
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;
+                   border-radius:20px;font-size:11px;font-weight:500;
+                   background:rgba(29,158,117,0.1);border:0.5px solid rgba(29,158,117,0.2);color:#1D9E75;">
+        <i class="ti ti-mail" style="font-size:12px;"></i>
+        {{ p.nb_email }} email
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;
+                   border-radius:20px;font-size:11px;font-weight:500;
+                   background:rgba(0,212,255,0.08);border:0.5px solid rgba(0,212,255,0.2);color:#00D4FF;">
+        <i class="ti ti-brand-whatsapp" style="font-size:12px;"></i>
+        {{ p.nb_whatsapp }} WA
+      </span>
+    </div>
+
+    <!-- Actions -->
+    <div style="display:flex;gap:8px;align-items:center;">
+      <a href="{{ url_for('dashboard.templates_for_product', id=p.product_id) }}"
+         style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+                padding:8px 12px;border-radius:8px;
+                background:linear-gradient(135deg,#1E6FD9,#29ABE2);
+                color:#fff;font-size:12px;font-weight:600;text-decoration:none;transition:all .2s;"
+         onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+        <i class="ti ti-eye" style="font-size:14px;"></i> Voir templates
+      </a>
+      <a href="{{ url_for('dashboard.edit_template', pid=p.product_id) }}"
+         style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:8px;
+                background:rgba(29,158,117,0.1);border:0.5px solid rgba(29,158,117,0.3);
+                color:#1D9E75;font-size:12px;font-weight:500;text-decoration:none;transition:all .2s;"
+         onmouseover="this.style.background='rgba(29,158,117,0.2)'" 
+         onmouseout="this.style.background='rgba(29,158,117,0.1)'">
+        <i class="ti ti-plus" style="font-size:14px;"></i>
+      </a>
+      <form method="post" action="{{ url_for('dashboard.delete_product_post') }}" style="margin:0;"
+            onsubmit="return confirm('Supprimer ce produit ET tous ses templates ?');">
+        <input type="hidden" name="product_id" value="{{ p.product_id }}">
+        <button type="submit"
+                style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:8px;
+                       background:rgba(226,75,74,0.08);border:0.5px solid rgba(226,75,74,0.25);
+                       color:#E24B4A;font-size:12px;font-weight:500;cursor:pointer;transition:all .2s;"
+                onmouseover="this.style.background='rgba(226,75,74,0.18)'"
+                onmouseout="this.style.background='rgba(226,75,74,0.08)'">
+          <i class="ti ti-trash" style="font-size:14px;"></i>
+        </button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<!-- État vide -->
+<div style="text-align:center;padding:64px 32px;background:#0D1F3C;border:0.5px solid #1E3A5F;
+            border-radius:16px;border-style:dashed;">
+  <div style="width:64px;height:64px;background:rgba(30,111,217,0.1);border-radius:16px;
+              display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+    <i class="ti ti-template" style="font-size:32px;color:#1E6FD9;opacity:.5;"></i>
+  </div>
+  <div style="font-size:16px;font-weight:600;color:#E8EDF5;margin-bottom:6px;">Aucun produit</div>
+  <div style="font-size:13px;color:#4A7FA8;margin-bottom:20px;">
+    Créez votre premier template pour commencer les relances
+  </div>
+  <a href="{{ url_for('dashboard.edit_template') }}"
+     style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:8px;
+            background:linear-gradient(135deg,#1E6FD9,#29ABE2);
+            color:#fff;font-size:13px;font-weight:600;text-decoration:none;">
+    <i class="ti ti-plus" style="font-size:16px;"></i> Ajouter un template
+  </a>
+</div>
+{% endif %}
+
 {% endblock %}
