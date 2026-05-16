@@ -347,16 +347,20 @@ def save_message(
         return str(row["id"]) if row else None
 
 
-def fetch_history(conv_id: str, limit: int = 20) -> list[dict]:
+def fetch_history(conv_id: str, limit: int = 30) -> list[dict]:
     with get_connection(readonly=True) as conn:
         rows = execute_with_retry(
             conn,
             """
             SELECT id, role, content, timestamp, metadata, feedback
-            FROM messages
-            WHERE conversation_id = %s
+            FROM (
+                SELECT id, role, content, timestamp, metadata, feedback
+                FROM messages
+                WHERE conversation_id = %s
+                ORDER BY timestamp DESC
+                LIMIT %s
+            ) sub
             ORDER BY timestamp ASC
-            LIMIT %s
             """,
             (conv_id, limit),
             fetch="all",

@@ -15,17 +15,30 @@ import logging
 from typing import Optional
 import re
 
-from webhook_app.database_conv import (
-    get_or_create_conversation,
-    save_message,
-    fetch_history,
-    message_already_exists,
-    update_conversation_context,
-)
 from webhook_app.conversation.state_machine import StateMachine
 from webhook_app.conversation.context_builder import ContextBuilder
 from webhook_app.llm.engine import LLMEngine
 from webhook_app.services.whatsapp import WhatsAppService
+
+
+
+from webhook_app.database_conv import (
+    get_or_create_conversation,
+    save_message,
+    fetch_history,
+    toggle_ai,
+    message_already_exists,
+    update_conversation_state,
+    update_conversation_context,
+)
+from webhook_app.database_v21 import (
+    is_blacklisted,
+    is_business_open,
+    log_escalation,
+    find_sale_by_identifier,
+    save_escalation_summary
+)
+
 
 _wa = WhatsAppService()
 
@@ -76,11 +89,6 @@ class ConversationManager:
             return
 
         # 2. Blacklist
-        from webhook_app.database_v21 import (
-            is_blacklisted,
-            is_business_open,
-            log_escalation,
-        )
         if is_blacklisted(phone):
             logger.warning("Numéro blacklisté — message ignoré : %s", phone)
             return
@@ -148,14 +156,90 @@ class ConversationManager:
             wa_message_id=wa_message_id,
         )
 
-        # 7. Construire le contexte LLM
+        # ── Détection email pour vérification paiement ────────────────
+        email_pattern = _re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+        email_match = email_pattern.search(text)
+        context_note = ""
+
+        # Vérifier si le sale existant correspond au produit en discussion
+        current_product = conversation.get("product_id")
+        current_sale_id = conversation.get("last_sale_id")
+
+        sale_matches_product = False
+        if current_sale_id and current_product:
+            try:
+                from webhook_app.database_pg import get_connection, execute_with_retry
+                with get_connection(readonly=True) as conn:
+                    row = execute_with_retry(
+                        conn,
+                        "SELECT product_id FROM fact_sales WHERE sale_id = %s LIMIT 1",
+                        (current_sale_id,),
+                        fetch="one",
+                    )
+                    if row:
+                        sale_matches_product = row["product_id"] == current_product
+            except Exception as e:
+                logger.warning("Vérification sale_matches_product échouée : %s", e)
+
+        needs_verification = (
+            email_match
+            and conversation.get("state") not in ("post_sale", "payment_success", "new_prospect")
+            and (
+                not current_sale_id          
+                or not sale_matches_product  
+            )
+        )
+
+        if needs_verification:
+            identifier = email_match.group(0)
+            logger.info("Email détecté en contexte vérification : %s", identifier)
+
+            current_product = conversation.get("product_id")
+            sale = find_sale_by_identifier(identifier, product_id=current_product)
+
+
+            if sale:
+                status = sale.get("status", "")
+                update_conversation_context(conv_id, last_sale_id=sale["sale_id"], product_id=sale["product_id"])
+                status_to_state = {
+                    "completed": "payment_success",
+                    "failed":    "payment_failed",
+                    "abandoned": "payment_abandoned",
+                }
+                new_state = status_to_state.get(status)
+                if new_state:
+                    update_conversation_state(conv_id, new_state)
+                    conversation["state"] = new_state
+                conversation["last_sale_id"] = sale["sale_id"]
+                conversation["product_id"]   = sale["product_id"]
+                context_note = (
+                    f"\n[RÉSULTAT VÉRIFICATION] Paiement '{status}' trouvé "
+                    f"pour {sale.get('product_name', sale.get('product_id'))}. "
+                    f"Adapte ta réponse selon le statut."
+                )
+            else:
+                context_note = (
+                    f"\n[RÉSULTAT VÉRIFICATION] Aucun paiement trouvé pour '{identifier}'. "
+                    f"Dis honnêtement qu'aucune trace n'existe et propose le lien "
+                    f"de finalisation ou demande un autre identifiant."
+                )
+        logger.info(
+            "VERIFY CHECK — email_match=%s | last_sale_id=%s | state=%s | needs_verification=%s",
+            email_match.group(0) if email_match else None,
+            conversation.get("last_sale_id"),
+            conversation.get("state"),
+            needs_verification,
+        )
+
+        # 7. Construire le contexte LLM — toujours exécuté
         history = fetch_history(conv_id)
         context = self.context_builder.build(
             conversation=conversation,
             history=history,
-            user_message=text,
+            user_message=text + context_note,  # context_note = "" si pas de vérification
         )
 
+       
         # Appel LLM direct — le modèle juge seul si escalade nécessaire
         try:
             response_text, chunk_ids = self.llm_engine.generate(
@@ -172,6 +256,82 @@ class ConversationManager:
 
         # Détecter escalade via tag LLM uniquement
         escalade_requise = "[ESCALADE_REQUISE]" in response_text
+
+        # ── Détecter tag VERIFY_PAYMENT ───────────────────────────────
+        import re as _re
+        verify_match = _re.search(r'\[VERIFY_PAYMENT:([^\]]+)\]', response_text)
+
+        if verify_match:
+            identifier = verify_match.group(1).strip()
+            logger.info("VERIFY_PAYMENT déclenché : %s", identifier)
+
+            # Stripper le tag avant tout traitement
+            response_text = _re.sub(r'\[VERIFY_PAYMENT:[^\]]+\]', '', response_text).strip()
+
+            # Recherche dans fact_sales avec vérification croisée produit
+
+            current_product = conversation.get("product_id")
+            sale = find_sale_by_identifier(identifier, product_id=current_product)
+
+            if sale:
+                status       = sale.get("status", "")
+                found_product = sale.get("product_id")
+
+                # Mettre à jour la conversation avec les vraies données
+                status_to_state = {
+                    "completed": "payment_success",
+                    "failed":    "payment_failed",
+                    "abandoned": "payment_abandoned",
+                }
+                new_state = status_to_state.get(status)
+                update_conversation_context(
+                    conv_id,
+                    last_sale_id=sale["sale_id"],
+                    product_id=found_product,
+                )
+                if new_state:
+                    update_conversation_state(conv_id, new_state)
+                    conversation["state"]    = new_state
+                conversation["last_sale_id"] = sale["sale_id"]
+                conversation["product_id"]   = found_product
+
+                # Cas produit différent de celui en discussion
+                if current_product and found_product != current_product:
+                    context_note = (
+                        f"\n[RÉSULTAT VÉRIFICATION] Paiement '{status}' trouvé "
+                        f"pour {sale.get('product_name', found_product)} — "
+                        f"différent du produit en discussion ({current_product}). "
+                        f"Informe le client et adapte ta réponse."
+                    )
+                else:
+                    context_note = (
+                        f"\n[RÉSULTAT VÉRIFICATION] Paiement '{status}' trouvé "
+                        f"pour {sale.get('product_name', found_product)}. "
+                        f"Adapte ta réponse selon le statut."
+                    )
+            else:
+                context_note = (
+                    f"\n[RÉSULTAT VÉRIFICATION] Aucun paiement trouvé "
+                    f"pour '{identifier}' "
+                    f"sur le produit ({current_product or 'inconnu'}). "
+                    f"Demande un autre identifiant (email ou téléphone) "
+                    f"ou oriente vers l'achat si aucune trace."
+                )
+                logger.info("VERIFY_PAYMENT : aucune transaction pour %s", identifier)
+
+            # Régénérer la réponse avec le vrai résultat
+            context2 = self.context_builder.build(
+                conversation=conversation,
+                history=history,
+                user_message=text + context_note,
+            )
+            response_text, chunk_ids = self.llm_engine.generate(
+                system_prompt=context2["system_prompt"],
+                messages=context2["messages"],
+            )
+            # Stripper le tag si le LLM le régénère
+            response_text = _re.sub(r'\[VERIFY_PAYMENT:[^\]]+\]', '', response_text).strip()
+
 
         logger.info("=== ESCALADE CHECK ===")
         logger.info("response_text brut : %s", response_text[:200])
@@ -223,7 +383,6 @@ class ConversationManager:
             conversation=conversation,
         )
         if new_state and new_state != current_state:
-            from webhook_app.database_conv import update_conversation_state
             update_conversation_state(conv_id, new_state)
             logger.info(
                 "Transition état : %s → %s (conversation %s)",
@@ -275,7 +434,7 @@ class ConversationManager:
 
         # Mettre à jour l'état selon l'événement
         if conversation["state"] != new_state:
-            from webhook_app.database_conv import update_conversation_state
+            
             update_conversation_state(str(conversation["id"]), new_state)
 
         logger.info(
@@ -288,37 +447,98 @@ def _handle_escalade(conv_id: str, phone: str, last_message: str) -> None:
     Gère l'escalade automatique :
     1. Désactive l'IA sur la conversation
     2. Met l'état en escalation
-    3. Notifie l'admin par WhatsApp
+    3. Génère un résumé de la conversation via Claude
+    4. Sauvegarde le résumé dans escalation_log
+    5. Notifie l'admin par WhatsApp
     """
-    from webhook_app.database_conv import (
-        update_conversation_state,
-        toggle_ai,
-    )
     from webhook_app.services.whatsapp import WhatsAppService
     from webhook_app.config import Config
 
-    # Désactiver l'IA
+    # 1. Désactiver l'IA
     toggle_ai(conv_id, False)
     logger.info("IA désactivée — escalade conv=%s", conv_id)
 
-    # Mettre l'état en escalation
+    # 2. Mettre l'état en escalation
     update_conversation_state(conv_id, "escalation")
     logger.info("État → escalation conv=%s", conv_id)
 
-    # Extraire les 4 derniers chiffres pour identification rapide
+    # 3. Générer le résumé via Claude
+    summary = _generate_escalation_summary(conv_id, last_message)
+    if summary:
+        save_escalation_summary(conv_id, summary)
+        logger.info("Résumé escalade sauvegardé pour conv=%s", conv_id)
+
+    # 4. Extraire les 4 derniers chiffres pour identification rapide
     phone_digits = phone.replace("@c.us", "").strip()
     short_id = phone_digits[-4:] if len(phone_digits) >= 4 else phone_digits
 
-    # Notification admin
+    # 5. Notification admin avec résumé
     wa = WhatsAppService()
     notif = (
         f"🚨 *Escalade requise — #{short_id}*\n\n"
         f"Client : {phone_digits}\n"
-        f"Dernier message IA : {last_message[:120]}...\n\n"
-        f"Commandes disponibles dans la discussion client :\n"
+        f"Dernier message : {last_message[:120]}\n\n"
+    )
+
+    if summary:
+        notif += f"📋 *Résumé :*\n{summary}\n\n"
+
+    notif += (
+        f"Commandes dans la discussion client :\n"
         f"• *#REPRISE* — réactiver l'IA\n"
         f"• *#PAUSE* — garder la main\n"
         f"• *#RESOLU* — résolu + réactiver l'IA"
     )
-    wa.send_to_admin(notif, conv_id=conv_id)
+
+    wa.send_to_admin(notif)
     logger.info("Notification escalade envoyée à l'admin")
+
+
+def _generate_escalation_summary(conv_id: str, last_message: str) -> str | None:
+    """
+    Génère un résumé concis de la conversation via Claude.
+    Utilisé pour l'admin lors d'une escalade.
+    """
+    try:
+        from webhook_app.llm.engine import LLMEngine
+
+        history = fetch_history(conv_id, limit=20)
+        if not history:
+            return None
+
+        # Construire le transcript
+        transcript_lines = []
+        for msg in history:
+            role = "Client" if msg.get("role") == "user" else "IA"
+            content = (msg.get("content") or "")[:200]
+            transcript_lines.append(f"{role}: {content}")
+
+        transcript = "\n".join(transcript_lines)
+
+        # Prompt de résumé
+        summary_prompt = (
+            "Tu es un assistant qui résume des conversations WhatsApp "
+            "pour aider un admin à comprendre rapidement une situation d'escalade.\n\n"
+            "Résume en 3-4 phrases maximum :\n"
+            "1. Ce que le client voulait\n"
+            "2. Le problème principal rencontré\n"
+            "3. Ce qui a été tenté comme solution\n"
+            "4. Pourquoi l'escalade a été déclenchée\n\n"
+            "Sois concis et factuel. Pas de formules de politesse."
+        )
+
+        llm = LLMEngine()
+        response_text, _ = llm.generate(
+            system_prompt=summary_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Conversation à résumer :\n\n{transcript}\n\nDernier message déclencheur : {last_message}"
+                }
+            ],
+        )
+        return response_text.strip() if response_text else None
+
+    except Exception as e:
+        logger.warning("Génération résumé escalade échouée (non bloquant) : %s", e)
+        return None

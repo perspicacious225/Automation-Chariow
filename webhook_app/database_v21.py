@@ -92,6 +92,113 @@ def init_default_prompts(default_prompts: dict[str, dict]) -> None:
                 logger.info("Prompt mis à jour en DB : %s", key)
             else:
                 logger.debug("Prompt inchangé : %s", key)
+
+
+
+# =============================
+# CHERCHER UNE TRANSACTION D'UN PROSPECT AVEC SON MAIL OU NUMERO DE PAIEMENT
+#==============================
+
+def find_sale_by_email(email: str) -> dict | None:
+    """
+    Recherche une transaction dans fact_sales par email.
+    Utilisé quand le numéro de téléphone ne matche pas.
+    """
+    with get_connection(readonly=True) as conn:
+        row = execute_with_retry(
+            conn,
+            """
+            SELECT sale_id, phone, product_id, product_name,
+                   amount_value, currency, status,
+                   completed_at, failed_at, abandoned_at
+            FROM fact_sales
+            WHERE LOWER(email) = LOWER(%s)
+            ORDER BY
+                CASE status
+                    WHEN 'completed' THEN 1
+                    WHEN 'failed'    THEN 2
+                    WHEN 'abandoned' THEN 3
+                    ELSE 4
+                END,
+                created_at DESC
+            LIMIT 1
+            """,
+            (email.strip(),),
+            fetch="one",
+        )
+        return dict(row) if row else None
+    
+
+
+
+def find_sale_by_identifier(
+    identifier: str,
+    product_id: str | None = None,
+) -> dict | None:
+    """
+    Recherche une transaction dans fact_sales par email ou téléphone.
+    Si product_id fourni → vérification croisée email/téléphone + produit.
+
+    Retourne la transaction la plus pertinente :
+    - completed en priorité
+    - pour le produit demandé si fourni
+    """
+    identifier = identifier.strip().lower()
+
+    # Détecter si c'est un email ou un téléphone
+    is_email = "@" in identifier
+    phone_clean = identifier.replace("+", "").replace(" ", "").replace("-", "")
+
+    with get_connection(readonly=True) as conn:
+        if is_email:
+            sql = """
+                SELECT
+                    sale_id, phone, email, product_id, product_name,
+                    amount_value, currency, status,
+                    completed_at, failed_at, abandoned_at
+                FROM fact_sales
+                WHERE LOWER(email) = %s
+            """
+            params = [identifier]
+        else:
+            sql = """
+                SELECT
+                    sale_id, phone, email, product_id, product_name,
+                    amount_value, currency, status,
+                    completed_at, failed_at, abandoned_at
+                FROM fact_sales
+                WHERE REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '')
+                      LIKE %s
+            """
+            params = [f"%{phone_clean[-8:]}"]
+
+        # Filtrer par produit si fourni
+        if product_id:
+            sql += " AND product_id = %s"
+            params.append(product_id)
+
+        # Prioriser completed
+        sql += """
+            ORDER BY
+                CASE status
+                    WHEN 'completed' THEN 1
+                    WHEN 'failed'    THEN 2
+                    WHEN 'abandoned' THEN 3
+                    ELSE 4
+                END,
+                created_at DESC
+            LIMIT 1
+        """
+
+        row = execute_with_retry(conn, sql, params, fetch="one")
+        if not row:
+            return None
+
+        d = dict(row)
+        for f in ("completed_at", "failed_at", "abandoned_at"):
+            if isinstance(d.get(f), (datetime.datetime, datetime.date)):
+                d[f] = d[f].isoformat()
+        return d
 # ══════════════════════════════════════════════════════════════════════════════
 # KB SOURCES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -656,3 +763,180 @@ def get_top_products_by_conversations(days_back: int = 30) -> list[dict]:
             fetch="all",
         ) or []
         return [dict(r) for r in rows]
+    
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MULTI-LANGUE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def set_conversation_language(conv_id: str, language: str) -> bool:
+    """Met à jour la langue détectée d'une conversation."""
+    with get_connection() as conn:
+        rc = execute_with_retry(
+            conn,
+            "UPDATE conversations SET language = %s WHERE id = %s",
+            (language, conv_id),
+        )
+        return (rc or 0) > 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ENRICHISSEMENT CONTEXTE CLIENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_customer_transactions(phone: str) -> list[dict]:
+    """
+    Récupère toutes les transactions d'un client depuis fact_sales.
+    Normalise le numéro pour matcher les différents formats.
+    """
+    phone_clean = phone.replace("@c.us", "").strip()
+
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(
+            conn,
+            """
+            SELECT
+                phone, product_id, product_name,
+                amount_value, currency, status,
+                transaction_type, hours_since_created,
+                created_at, completed_at, failed_at, abandoned_at
+            FROM customer_transaction_context
+            WHERE phone LIKE %s
+               OR phone = %s
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            (f"%{phone_clean[-8:]}", phone_clean),
+            fetch="all",
+        ) or []
+        result = []
+        for row in rows:
+            d = dict(row)
+            for f in ("created_at","completed_at","failed_at","abandoned_at"):
+                if isinstance(d.get(f), (datetime.datetime, datetime.date)):
+                    d[f] = d[f].isoformat()
+            if d.get("hours_since_created"):
+                d["hours_since_created"] = round(float(d["hours_since_created"]), 1)
+            result.append(d)
+        return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RÉSUMÉ ESCALADE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def save_escalation_summary(conversation_id: str, summary: str) -> bool:
+    """Sauvegarde le résumé généré par Claude sur l'escalade."""
+    with get_connection() as conn:
+        rc = execute_with_retry(
+            conn,
+            """
+            UPDATE escalation_log
+            SET summary = %s
+            WHERE conversation_id = %s
+              AND resolution = 'pending'
+            """,
+            (summary, conversation_id),
+        )
+        return (rc or 0) > 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# A/B TESTING
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_active_experiment() -> dict | None:
+    """Retourne l'expérience A/B active si elle existe."""
+    with get_connection(readonly=True) as conn:
+        row = execute_with_retry(
+            conn,
+            """
+            SELECT * FROM ab_experiments
+            WHERE is_active = TRUE
+              AND (ended_at IS NULL OR ended_at > NOW())
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            fetch="one",
+        )
+        return dict(row) if row else None
+
+
+def get_or_assign_variant(
+    experiment_id: str,
+    conversation_id: str,
+    phone: str,
+    split_percent: int = 50,
+) -> str:
+    """
+    Retourne le variant A/B assigné à cette conversation.
+    Assignation déterministe par hash du numéro — stable entre les sessions.
+    """
+    import hashlib
+    # Vérifier si déjà assigné
+    with get_connection(readonly=True) as conn:
+        row = execute_with_retry(
+            conn,
+            """
+            SELECT variant FROM ab_assignments
+            WHERE experiment_id = %s AND conversation_id = %s
+            LIMIT 1
+            """,
+            (experiment_id, conversation_id),
+            fetch="one",
+        )
+        if row:
+            return row["variant"]
+
+    # Assigner déterministiquement par hash du numéro
+    phone_clean = phone.replace("@c.us", "").strip()
+    h = int(hashlib.sha256(phone_clean.encode()).hexdigest()[:8], 16) % 100
+    variant = "B" if h < split_percent else "A"
+
+    # Sauvegarder l'assignation
+    with get_connection() as conn:
+        execute_with_retry(
+            conn,
+            """
+            INSERT INTO ab_assignments
+                (experiment_id, conversation_id, phone, variant)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (experiment_id, conversation_id) DO NOTHING
+            """,
+            (experiment_id, conversation_id, phone_clean, variant),
+        )
+    return variant
+
+
+def get_ab_results(experiment_id: str) -> dict:
+    """Retourne les résultats comparatifs d'une expérience A/B."""
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(
+            conn,
+            """
+            SELECT
+                aa.variant,
+                COUNT(*)                                           AS total,
+                COUNT(*) FILTER (WHERE ca.converted)              AS converted,
+                ROUND(
+                    COUNT(*) FILTER (WHERE ca.converted)::NUMERIC
+                    / NULLIF(COUNT(*), 0) * 100, 1
+                )                                                  AS conversion_rate,
+                COUNT(*) FILTER (WHERE ca.has_escalated)          AS escalated,
+                ROUND(AVG(ca.message_count), 1)                   AS avg_messages
+            FROM ab_assignments aa
+            JOIN conversation_analytics ca ON ca.id = aa.conversation_id
+            WHERE aa.experiment_id = %s
+            GROUP BY aa.variant
+            ORDER BY aa.variant
+            """,
+            (experiment_id,),
+            fetch="all",
+        ) or []
+        return {
+            "experiment_id": experiment_id,
+            "results": [dict(r) for r in rows],
+        }

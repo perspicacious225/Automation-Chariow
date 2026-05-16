@@ -1,0 +1,392 @@
+{% extends "dashboard_v2/base.html" %}
+
+{% block title %}A/B Testing{% endblock %}
+
+{% block topbar %}
+<div class="topbar">
+  <div>
+    <span class="topbar-title">A/B Testing</span>
+    <span class="topbar-sub">Testez différentes versions de prompts sur vos clients</span>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-ghost btn-sm" onclick="loadExperiments()">
+      <i class="ti ti-refresh"></i> Actualiser
+    </button>
+    <button class="btn btn-primary btn-sm" onclick="openModal('modalCreate')">
+      <i class="ti ti-plus"></i> Nouvelle expérience
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Bandeau info -->
+<div style="background:rgba(30,111,217,0.08);border:0.5px solid rgba(30,111,217,0.2);
+            border-radius:10px;padding:12px 16px;display:flex;align-items:flex-start;
+            gap:10px;margin-bottom:20px;font-size:12px;color:var(--blue-light);">
+  <i class="ti ti-info-circle" style="font-size:16px;flex-shrink:0;margin-top:1px;"></i>
+  <div>
+    <div style="font-weight:600;margin-bottom:3px;">Infrastructure en place — évaluation différée</div>
+    <div style="color:var(--text-muted);">
+      Les expériences sont actives et assignent des variants aux conversations.
+      Les résultats seront significatifs une fois un volume suffisant atteint (300+ conversations par variant).
+      Créez vos variantes de prompts dans <a href="/dashboard/v2/prompts/" style="color:var(--blue-light);">Prompts système</a> avant de lancer une expérience.
+    </div>
+  </div>
+</div>
+
+<!-- Liste expériences -->
+<div style="font-size:13px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:6px;margin-bottom:12px;">
+  <i class="ti ti-test-pipe" style="font-size:16px;color:var(--text-muted);"></i>
+  Expériences
+</div>
+
+<div id="experimentsList">
+  <div class="skeleton" style="height:80px;border-radius:10px;margin-bottom:8px;"></div>
+  <div class="skeleton" style="height:80px;border-radius:10px;margin-bottom:8px;"></div>
+</div>
+
+<!-- Modal créer expérience -->
+<div class="modal-overlay" id="modalCreate">
+  <div class="modal-box" style="width:520px;">
+    <div class="modal-header">
+      <div class="modal-title">Nouvelle expérience A/B</div>
+      <button class="btn-icon" onclick="closeModal('modalCreate')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+
+      <div style="background:rgba(239,159,39,0.08);border:0.5px solid rgba(239,159,39,0.25);
+                  border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--amber);
+                  display:flex;align-items:flex-start;gap:8px;">
+        <i class="ti ti-alert-triangle" style="font-size:14px;flex-shrink:0;"></i>
+        Une seule expérience peut être active à la fois. Désactivez l'expérience courante avant d'en créer une nouvelle.
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Nom de l'expérience</label>
+        <input class="form-input" id="expName" placeholder="Ex: prompt_tone_empathique_vs_direct" style="font-family:var(--font-mono);" />
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Identifiant unique, sans espaces</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <input class="form-input" id="expDescription" placeholder="Ex: Test d'un ton plus empathique vs ton direct" />
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label class="form-label">
+            Variant A — Clé prompt
+            <span style="font-size:10px;color:var(--green);font-weight:400;">(contrôle)</span>
+          </label>
+          <input class="form-input" id="expVariantA" placeholder="Ex: base"
+            style="font-family:var(--font-mono);" />
+          <div style="font-size:10px;color:var(--text-muted);margin-top:3px;">Prompt existant dans system_prompts</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">
+            Variant B — Clé prompt
+            <span style="font-size:10px;color:var(--blue-light);font-weight:400;">(test)</span>
+          </label>
+          <input class="form-input" id="expVariantB" placeholder="Ex: base_empathique"
+            style="font-family:var(--font-mono);" />
+          <div style="font-size:10px;color:var(--text-muted);margin-top:3px;">Nouveau prompt à tester</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">
+          Répartition trafic vers Variant B
+          <span id="splitLabel" style="font-size:12px;color:var(--blue-light);font-weight:600;margin-left:8px;">50%</span>
+        </label>
+        <input type="range" id="expSplit" min="10" max="90" value="50" step="5"
+          style="width:100%;accent-color:var(--blue);"
+          oninput="document.getElementById('splitLabel').textContent=this.value+'%'" />
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-top:4px;">
+          <span>A : <span id="aLabel">50</span>%</span>
+          <span>B : <span id="bLabel">50</span>%</span>
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalCreate')">Annuler</button>
+      <button class="btn btn-primary" onclick="createExperiment()">
+        <i class="ti ti-test-pipe"></i> Lancer l'expérience
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal résultats -->
+<div class="modal-overlay" id="modalResults">
+  <div class="modal-box" style="width:580px;">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="resultsTitle">Résultats — —</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;" id="resultsSub">—</div>
+      </div>
+      <button class="btn-icon" onclick="closeModal('modalResults')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body" id="resultsBody">
+      <div style="text-align:center;padding:32px;color:var(--text-muted);">Chargement...</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modalResults')">Fermer</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var experiments = [];
+
+/* ── Slider répartition ─────────────────────────────────────── */
+document.getElementById('expSplit').addEventListener('input', function() {
+  var b = parseInt(this.value);
+  var a = 100 - b;
+  document.getElementById('aLabel').textContent = a;
+  document.getElementById('bLabel').textContent = b;
+  document.getElementById('splitLabel').textContent = b + '%';
+});
+
+/* ── Chargement ─────────────────────────────────────────────── */
+async function loadExperiments() {
+  try {
+    var data = await api('GET', '/dashboard/v2/api/ab/experiments/');
+    experiments = data.experiments || [];
+    renderExperiments(experiments);
+  } catch(e) {
+    showToast('Erreur chargement expériences', 'error');
+  }
+}
+
+function renderExperiments(items) {
+  if (!items.length) {
+    document.getElementById('experimentsList').innerHTML = `
+      <div style="text-align:center;padding:48px;color:var(--text-muted);">
+        <i class="ti ti-test-pipe" style="font-size:36px;display:block;margin-bottom:10px;opacity:.3;"></i>
+        <div style="font-size:13px;margin-bottom:6px;">Aucune expérience</div>
+        <div style="font-size:12px;">Créez votre première expérience A/B pour tester différents prompts</div>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('experimentsList').innerHTML = items.map(function(exp) {
+    var isActive = exp.is_active;
+    var accentColor = isActive ? 'var(--green)' : 'var(--border)';
+    var statusBadge = isActive
+      ? '<span class="badge badge-green" style="animation:pulse-badge 1.5s infinite;">● Actif</span>'
+      : '<span class="badge badge-gray">Inactif</span>';
+    var startDate = exp.started_at ? new Date(exp.started_at).toLocaleDateString('fr-FR') : '—';
+
+    return `
+    <div style="background:var(--bg-elevated);border:0.5px solid var(--border);
+                border-left:3px solid ${accentColor};border-radius:10px;
+                padding:14px 16px;margin-bottom:8px;transition:all .2s;">
+
+      <div style="display:flex;align-items:flex-start;gap:12px;">
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <span style="font-size:12px;font-weight:600;color:var(--text-primary);font-family:var(--font-mono);">
+              ${escapeHtml(exp.name)}
+            </span>
+            ${statusBadge}
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
+            ${exp.description ? escapeHtml(exp.description) : '<span style="font-style:italic;">Aucune description</span>'}
+          </div>
+          <div style="display:flex;gap:16px;font-size:11px;">
+            <div>
+              <span style="color:var(--text-muted);">Variant A : </span>
+              <span style="color:var(--green);font-family:var(--font-mono);">${exp.variant_a_key}</span>
+            </div>
+            <div>
+              <span style="color:var(--text-muted);">Variant B : </span>
+              <span style="color:var(--blue-light);font-family:var(--font-mono);">${exp.variant_b_key}</span>
+            </div>
+            <div>
+              <span style="color:var(--text-muted);">Split : </span>
+              <span style="color:var(--text-primary);">${100 - exp.split_percent}% A / ${exp.split_percent}% B</span>
+            </div>
+            <div>
+              <span style="color:var(--text-muted);">Démarré le : </span>
+              <span style="color:var(--text-primary);">${startDate}</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <button class="btn btn-ghost btn-sm" onclick="openResults('${exp.id}','${escapeHtml(exp.name)}')">
+            <i class="ti ti-chart-bar"></i> Résultats
+          </button>
+          <button class="btn btn-sm ${isActive ? 'btn-danger' : 'btn-primary'}"
+            onclick="toggleExperiment('${exp.id}', ${!isActive})">
+            <i class="ti ti-${isActive ? 'player-pause' : 'player-play'}"></i>
+            ${isActive ? 'Désactiver' : 'Activer'}
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ── Créer expérience ───────────────────────────────────────── */
+async function createExperiment() {
+  var name         = document.getElementById('expName').value.trim();
+  var description  = document.getElementById('expDescription').value.trim();
+  var variantA     = document.getElementById('expVariantA').value.trim();
+  var variantB     = document.getElementById('expVariantB').value.trim();
+  var splitPercent = parseInt(document.getElementById('expSplit').value);
+
+  if (!name || !variantA || !variantB) {
+    showToast('Nom, Variant A et Variant B requis', 'warning');
+    return;
+  }
+
+  if (name.includes(' ')) {
+    showToast('Le nom ne doit pas contenir d\'espaces', 'warning');
+    return;
+  }
+
+  try {
+    await api('POST', '/dashboard/v2/api/ab/experiments/', {
+      name, description,
+      variant_a_key: variantA,
+      variant_b_key: variantB,
+      split_percent: splitPercent,
+    });
+    closeModal('modalCreate');
+    showToast('Expérience créée et active', 'success');
+    loadExperiments();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Toggle actif/inactif ───────────────────────────────────── */
+async function toggleExperiment(id, isActive) {
+  try {
+    await api('PUT', '/dashboard/v2/api/ab/experiments/' + id + '/toggle/', { is_active: isActive });
+    showToast(isActive ? 'Expérience activée' : 'Expérience désactivée',
+              isActive ? 'success' : 'info');
+    loadExperiments();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+
+/* ── Résultats ──────────────────────────────────────────────── */
+async function openResults(id, name) {
+  document.getElementById('resultsTitle').textContent = 'Résultats — ' + name;
+  document.getElementById('resultsSub').textContent = 'Chargement...';
+  document.getElementById('resultsBody').innerHTML =
+    '<div style="text-align:center;padding:32px;color:var(--text-muted);">Chargement...</div>';
+  openModal('modalResults');
+
+  try {
+    var data = await api('GET', '/dashboard/v2/api/ab/experiments/' + id + '/results/');
+    renderResults(data);
+  } catch(e) {
+    document.getElementById('resultsBody').innerHTML =
+      '<div style="text-align:center;padding:32px;color:var(--red);">Erreur chargement résultats</div>';
+  }
+}
+
+function renderResults(data) {
+  var results = data.results || [];
+
+  if (!results.length) {
+    document.getElementById('resultsSub').textContent = 'Aucune donnée encore';
+    document.getElementById('resultsBody').innerHTML = `
+      <div style="text-align:center;padding:40px;color:var(--text-muted);">
+        <i class="ti ti-chart-bar" style="font-size:36px;display:block;margin-bottom:12px;opacity:.3;"></i>
+        <div style="font-size:13px;margin-bottom:6px;">Pas encore de données</div>
+        <div style="font-size:12px;">Les résultats apparaîtront une fois que des conversations
+        auront été assignées aux variants.</div>
+      </div>`;
+    return;
+  }
+
+  var totalConvs = results.reduce(function(s, r) { return s + parseInt(r.total || 0); }, 0);
+  document.getElementById('resultsSub').textContent = totalConvs + ' conversations assignées';
+
+  var variantColors = { A: 'var(--green)', B: 'var(--blue-light)' };
+
+  document.getElementById('resultsBody').innerHTML = `
+    <div style="font-size:11px;color:var(--amber);background:rgba(239,159,39,0.08);
+                border:0.5px solid rgba(239,159,39,0.25);border-radius:8px;
+                padding:8px 12px;margin-bottom:16px;display:flex;align-items:center;gap:6px;">
+      <i class="ti ti-alert-triangle" style="font-size:13px;"></i>
+      Résultats préliminaires — significatifs à partir de 300+ conversations par variant
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(${results.length},1fr);gap:12px;margin-bottom:20px;">
+      ${results.map(function(r) {
+        var color = variantColors[r.variant] || 'var(--text-muted)';
+        var rate = r.conversion_rate || 0;
+        return `
+        <div style="background:var(--bg-base);border:0.5px solid var(--border);border-radius:10px;padding:14px;text-align:center;">
+          <div style="font-size:22px;font-weight:700;color:${color};margin-bottom:2px;">Variant ${r.variant}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">${r.total} conversations</div>
+          <div style="font-size:28px;font-weight:700;color:#fff;line-height:1;">${rate}%</div>
+          <div style="font-size:11px;color:var(--text-muted);">taux de conversion</div>
+          <div class="divider"></div>
+          <div style="font-size:11px;color:var(--text-muted);">
+            ${r.converted} convertis · ${r.escalated} escalades
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+            ~${r.avg_messages || '—'} messages/conv
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    ${results.length === 2 ? renderComparison(results) : ''}
+  `;
+}
+
+function renderComparison(results) {
+  var a = results.find(function(r) { return r.variant === 'A'; });
+  var b = results.find(function(r) { return r.variant === 'B'; });
+  if (!a || !b) return '';
+
+  var rateA = parseFloat(a.conversion_rate || 0);
+  var rateB = parseFloat(b.conversion_rate || 0);
+  var diff  = (rateB - rateA).toFixed(1);
+  var winner = rateB > rateA ? 'B' : rateA > rateB ? 'A' : null;
+  var diffColor = diff > 0 ? 'var(--green)' : diff < 0 ? 'var(--red)' : 'var(--text-muted)';
+
+  return `
+  <div style="background:var(--bg-base);border:0.5px solid var(--border);border-radius:10px;padding:14px;">
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;
+                letter-spacing:.06em;margin-bottom:10px;">Comparaison</div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:16px;">
+      <div style="text-align:center;">
+        <div style="font-size:13px;color:var(--green);font-weight:600;">A : ${rateA}%</div>
+      </div>
+      <div style="font-size:20px;font-weight:700;color:${diffColor};">
+        ${diff > 0 ? '+' : ''}${diff}%
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:13px;color:var(--blue-light);font-weight:600;">B : ${rateB}%</div>
+      </div>
+    </div>
+    ${winner ? `
+    <div style="text-align:center;margin-top:10px;font-size:12px;color:var(--text-muted);">
+      Variant <strong style="color:${winner === 'B' ? 'var(--blue-light)' : 'var(--green)'};">${winner}</strong>
+      performe mieux — attendez 300+ conversations pour conclure
+    </div>` : '<div style="text-align:center;margin-top:10px;font-size:12px;color:var(--text-muted);">Résultats équivalents</div>'}
+  </div>`;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+document.addEventListener('DOMContentLoaded', loadExperiments);
+</script>
+{% endblock %}

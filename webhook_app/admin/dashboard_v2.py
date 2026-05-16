@@ -895,3 +895,88 @@ def _serialize_datetimes(d: dict) -> None:
     for key, value in d.items():
         if isinstance(value, (datetime.datetime, datetime.date)):
             d[key] = value.isoformat()
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE HTML v2.1.2
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/ab-testing/")
+@login_required
+def ab_testing():
+    return render_template("dashboard_v2/ab_testing.html")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API — A/B TESTING
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dashboard_v2_bp.get("/api/ab/experiments/")
+@login_required
+def api_list_experiments():
+    from webhook_app.database_pg import get_connection, execute_with_retry
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(
+            conn,
+            "SELECT * FROM ab_experiments ORDER BY created_at DESC",
+            fetch="all",
+        ) or []
+        experiments = []
+        for row in rows:
+            d = dict(row)
+            _serialize_datetimes(d)
+            experiments.append(d)
+    return jsonify({"experiments": experiments})
+
+
+@dashboard_v2_bp.post("/api/ab/experiments/")
+@login_required
+def api_create_experiment():
+    from webhook_app.database_pg import get_connection, execute_with_retry
+    body = request.get_json(silent=True) or {}
+    name          = (body.get("name") or "").strip()
+    description   = (body.get("description") or "").strip()
+    variant_a_key = (body.get("variant_a_key") or "").strip()
+    variant_b_key = (body.get("variant_b_key") or "").strip()
+    split_percent = int(body.get("split_percent", 50))
+
+    if not all([name, variant_a_key, variant_b_key]):
+        return jsonify({"error": "name, variant_a_key, variant_b_key requis"}), 400
+
+    with get_connection() as conn:
+        row = execute_with_retry(
+            conn,
+            """
+            INSERT INTO ab_experiments
+                (name, description, variant_a_key, variant_b_key, split_percent)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (name, description, variant_a_key, variant_b_key, split_percent),
+            fetch="one",
+        )
+    return jsonify({"status": "ok", "id": str(row["id"]) if row else None})
+
+
+@dashboard_v2_bp.put("/api/ab/experiments/<exp_id>/toggle/")
+@login_required
+def api_toggle_experiment(exp_id: str):
+    from webhook_app.database_pg import get_connection, execute_with_retry
+    body = request.get_json(silent=True) or {}
+    is_active = bool(body.get("is_active", True))
+    with get_connection() as conn:
+        execute_with_retry(
+            conn,
+            "UPDATE ab_experiments SET is_active=%s WHERE id=%s",
+            (is_active, exp_id),
+        )
+    return jsonify({"status": "ok"})
+
+
+@dashboard_v2_bp.get("/api/ab/experiments/<exp_id>/results/")
+@login_required
+def api_experiment_results(exp_id: str):
+    from webhook_app.database_v21 import get_ab_results
+    results = get_ab_results(exp_id)
+    return jsonify(results)
