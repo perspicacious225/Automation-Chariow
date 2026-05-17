@@ -1,70 +1,72 @@
-{% extends "dashboard/base.html" %}
+{% extends "dashboard/base_auth.html" %}
 {% block title %}Inscription{% endblock %}
-{% block body_class %}page-auth register{% endblock %}
 
 {% block content %}
-<div class="auth-wrap">
-  <div class="auth-card" role="dialog" aria-labelledby="register-title">
-    <h1 id="register-title" class="auth-title">Inscription</h1>
+<div class="auth-card">
+  <div class="auth-title">Créer un compte</div>
+  <div class="auth-subtitle">Rejoignez l'espace de gestion Digitech Hub</div>
 
-    <form method="post" class="auth-form" novalidate>
-      <div class="field">
-        <label for="email">Email</label>
-        <input id="email"
-               type="email"
-               name="email"
-               autocomplete="username"
-               required
-               autofocus>
-      </div>
+  <form method="post" novalidate>
 
-      <div class="field password-field">
-        <label for="password">Mot de passe</label>
-        <div class="password-input">
-          <input id="password"
-                 type="password"
-                 name="password"
-                 autocomplete="new-password"
-                 required>
-          <button type="button"
-                  class="toggle-pass"
-                  aria-label="Afficher ou masquer le mot de passe">👁</button>
-        </div>
-      </div>
-
-      {# Option visible uniquement si l’utilisateur courant est admin #}
-      {% if current_user.is_authenticated and current_user.is_admin %}
-      <div class="field" style="display:flex;align-items:center;gap:10px">
-        <input id="is_admin" type="checkbox" name="is_admin" value="1">
-        <label for="is_admin" style="margin:0">Donner les droits admin</label>
-      </div>
-      {% endif %}
-
-      <div class="actions">
-        <button class="btn primary" type="submit">Créer le compte</button>
-      </div>
-    </form>
-
-    <div class="auth-alt">
-      Déjà un compte ? <a href="{{ url_for('auth.login') }}">Se connecter</a>
+    <div class="auth-field">
+      <label class="auth-label" for="email">
+        <i class="ti ti-mail" style="font-size:11px;margin-right:3px;"></i>
+        Email
+      </label>
+      <input class="auth-input" id="email" type="email" name="email"
+             autocomplete="username" required autofocus placeholder="votre@email.com">
     </div>
+
+    <div class="auth-field">
+      <label class="auth-label" for="password">
+        <i class="ti ti-lock" style="font-size:11px;margin-right:3px;"></i>
+        Mot de passe
+      </label>
+      <div class="password-wrap">
+        <input class="auth-input" id="password" type="password" name="password"
+               autocomplete="new-password" required placeholder="••••••••">
+        <button type="button" class="toggle-pass" id="toggleBtn" aria-label="Afficher le mot de passe">
+          <i class="ti ti-eye" id="eyeIcon"></i>
+        </button>
+      </div>
+    </div>
+
+    {% if current_user.is_authenticated and current_user.is_admin %}
+    <label class="auth-check">
+      <input type="checkbox" name="is_admin" value="1">
+      <span>Donner les droits admin</span>
+    </label>
+    {% endif %}
+
+    <button type="submit" class="auth-btn">
+      <i class="ti ti-user-plus" style="font-size:15px;margin-right:6px;vertical-align:middle;"></i>
+      Créer le compte
+    </button>
+
+  </form>
+
+  <div class="auth-divider"></div>
+
+  <div class="auth-alt">
+    Déjà un compte ? <a href="{{ url_for('auth.login') }}">Se connecter</a>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-  // Afficher/masquer le mot de passe
-  (function(){
-    const btn = document.querySelector('.toggle-pass');
-    const input = document.getElementById('password');
-    if (btn && input) {
-      btn.addEventListener('click', () => {
-        const isPwd = input.type === 'password';
-        input.type = isPwd ? 'text' : 'password';
-        btn.setAttribute('aria-pressed', String(isPwd));
-      });
-    }
-  })();
+(function() {
+  var btn   = document.getElementById('toggleBtn');
+  var input = document.getElementById('password');
+  var icon  = document.getElementById('eyeIcon');
+  if (btn && input) {
+    btn.addEventListener('click', function() {
+      var isPwd = input.type === 'password';
+      input.type = isPwd ? 'text' : 'password';
+      icon.className = isPwd ? 'ti ti-eye-off' : 'ti ti-eye';
+      btn.setAttribute('aria-pressed', String(isPwd));
+    });
+  }
+})();
 </script>
 {% endblock %}

@@ -1,8 +1,8 @@
 # webhook_app/app.py
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect, url_for
 from flask_cors import CORS
 import json, os, logging, hmac, hashlib          # ← CORRIGÉ : ajout hmac, hashlib
-from webhook_app.admin.dashboard import dashboard_bp
+from webhook_app.admin.dashboard import dashboard_bp, dashboard_view
 
 from webhook_app.database_pg import (
     Database,
@@ -36,10 +36,6 @@ def create_app():
     logger = logging.getLogger(__name__)
 
     app = Flask(__name__)
-    @app.after_request
-    def add_headers(response):
-        response.headers["ngrok-skip-browser-warning"] = "true"
-        return response
 
     CORS(app, resources={r"/webhook": {"origins": "*"}})
     app.config.from_object(Config)
@@ -121,41 +117,46 @@ def create_app():
 
     @app.route("/", methods=["GET"])
     def home():
-        return jsonify({"status": "running", "message": "Webhook handler is operational"}), 200
+        # return jsonify({"status": "running", "message": "Webhook handler is operational"}), 200
+        
+        return dashboard_view()
 
-    @app.get("/test-email")
-    def test_email():
-        to = request.args.get("to") or os.getenv("TEST_EMAIL_TO") or os.getenv("SENDER_EMAIL") or os.getenv("SMTP_USER")
-        if not to:
-            return jsonify({"ok": False, "error": "Spécifie ?to=... ou définis TEST_EMAIL_TO"}), 400
-        subject = "Test SMTP + IMAP (copie Envoyés) ✅"
-        html = "<h3>Bonjour 👋</h3><p>Test d'envoi via SMTP + copie IMAP dans <b>Envoyés</b>.</p>"
-        text = "Bonjour, test d'envoi via SMTP + copie IMAP dans Envoyés."
-        ok = email_service.send_email(recipient=to, subject=subject, html_body=html, plain_fallback=text)
-        return jsonify({"ok": ok, "to": to})
 
-    import imaplib
+        
 
-    @app.get("/debug-imap")
-    def debug_imap():
-        try:
-            host = os.getenv("IMAP_HOST")
-            port = int(os.getenv("IMAP_PORT", "993"))
-            user = os.getenv("IMAP_USER") or os.getenv("SMTP_USER")
-            pw   = os.getenv("IMAP_PASS") or os.getenv("SMTP_PASS")
-            with imaplib.IMAP4_SSL(host, port) as imap:
-                imap.login(user, pw)
-                typ, data = imap.list()
-                rows = []
-                if typ == "OK":
-                    for line in data or []:
-                        rows.append(line.decode("utf-8", "ignore"))
-                imap.logout()
-            return jsonify({"ok": True, "folders": rows})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+    # @app.get("/test-email")
+    # def test_email():
+    #     to = request.args.get("to") or os.getenv("TEST_EMAIL_TO") or os.getenv("SENDER_EMAIL") or os.getenv("SMTP_USER")
+    #     if not to:
+    #         return jsonify({"ok": False, "error": "Spécifie ?to=... ou définis TEST_EMAIL_TO"}), 400
+    #     subject = "Test SMTP + IMAP (copie Envoyés) ✅"
+    #     html = "<h3>Bonjour 👋</h3><p>Test d'envoi via SMTP + copie IMAP dans <b>Envoyés</b>.</p>"
+    #     text = "Bonjour, test d'envoi via SMTP + copie IMAP dans Envoyés."
+    #     ok = email_service.send_email(recipient=to, subject=subject, html_body=html, plain_fallback=text)
+    #     return jsonify({"ok": ok, "to": to})
 
-    @app.route("/webhook", methods=["GET", "POST", "OPTIONS"])
+    # import imaplib
+
+    # @app.get("/debug-imap")
+    # def debug_imap():
+    #     try:
+    #         host = os.getenv("IMAP_HOST")
+    #         port = int(os.getenv("IMAP_PORT", "993"))
+    #         user = os.getenv("IMAP_USER") or os.getenv("SMTP_USER")
+    #         pw   = os.getenv("IMAP_PASS") or os.getenv("SMTP_PASS")
+    #         with imaplib.IMAP4_SSL(host, port) as imap:
+    #             imap.login(user, pw)
+    #             typ, data = imap.list()
+    #             rows = []
+    #             if typ == "OK":
+    #                 for line in data or []:
+    #                     rows.append(line.decode("utf-8", "ignore"))
+    #             imap.logout()
+    #         return jsonify({"ok": True, "folders": rows})
+    #     except Exception as e:
+    #         return jsonify({"ok": False, "error": str(e)}), 500
+
+    # @app.route("/webhook", methods=["GET", "POST", "OPTIONS"])
     def handle_webhook():
 
         if request.method == "OPTIONS":
@@ -337,7 +338,7 @@ def create_app():
         except Exception as e:
             logger.warning("Réingestion KB au démarrage échouée : %s", e)
 
-    app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
+    app.register_blueprint(dashboard_bp)
     app.register_blueprint(dashboard_v2_bp)
     app.register_blueprint(inbound_bp)
 

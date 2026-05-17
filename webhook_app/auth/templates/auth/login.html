@@ -1,51 +1,76 @@
-{% extends "dashboard/base.html" %}
+{% extends "dashboard/base_auth.html" %}
 {% block title %}Connexion{% endblock %}
-{% block body_class %}page-auth login{% endblock %}
 
 {% block content %}
-<div class="auth-wrap">
-  <div class="auth-card" role="dialog" aria-labelledby="login-title">
-    <h1 id="login-title" class="auth-title">Connexion</h1>
+<div class="auth-card">
+  <div class="auth-title">Bon retour 👋</div>
+  <div class="auth-subtitle">Connectez-vous à votre espace Digitech Hub</div>
 
-    <form method="post" class="auth-form" novalidate>
-      <div class="field">
-        <label for="email">Email</label>
-        <input id="email" type="email" name="email" autocomplete="username" required autofocus>
-      </div>
+  {% if error %}
+  <div style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;
+              background:rgba(226,75,74,0.08);border:0.5px solid rgba(226,75,74,0.3);
+              border-radius:8px;margin-bottom:18px;animation:flash-in .3s ease;">
+    <i class="ti ti-alert-circle" style="font-size:16px;color:#E24B4A;flex-shrink:0;margin-top:1px;"></i>
+    <span style="font-size:12px;color:#F08080;line-height:1.5;">{{ error }}</span>
+  </div>
+  {% endif %}
 
-      <div class="field password-field">
-        <label for="password">Mot de passe</label>
-        <div class="password-input">
-          <input id="password" type="password" name="password" autocomplete="current-password" required>
-          <button type="button" class="toggle-pass" aria-label="Afficher ou masquer le mot de passe">👁</button>
-        </div>
-      </div>
+  <form method="post" novalidate >
 
-      <div class="actions">
-        <button class="btn primary" type="submit">Se connecter</button>
-      </div>
-    </form>
-
-    <div class="auth-alt">
-      Pas de compte ? <a href="{{ url_for('auth.register') }}">Créer un compte</a>
+    <div class="auth-field">
+      <label class="auth-label" for="email">
+        <i class="ti ti-mail" style="font-size:11px;margin-right:3px;"></i>
+        Email
+      </label>
+      <input class="auth-input" id="email" type="email" name="email"
+             autocomplete="username" required autofocus
+             placeholder="adresse mail"
+             value="{{ prefill_email or '' }}">
     </div>
+
+    <div class="auth-field">
+      <label class="auth-label" for="password">
+        <i class="ti ti-lock" style="font-size:11px;margin-right:3px;"></i>
+        Mot de passe
+      </label>
+      <div class="password-wrap">
+        <input class="auth-input" id="password" type="password" name="password"
+               autocomplete="current-password" required placeholder="••••••••">
+        <button type="button" class="toggle-pass" id="toggleBtn" aria-label="Afficher le mot de passe">
+          <i class="ti ti-eye" id="eyeIcon"></i>
+        </button>
+      </div>
+    </div>
+
+    <button type="submit" class="auth-btn">
+      <i class="ti ti-login" style="font-size:15px;margin-right:6px;vertical-align:middle;"></i>
+      Se connecter
+    </button>
+
+  </form>
+
+  <div class="auth-divider"></div>
+
+  <div class="auth-alt">
+    Pas de compte ? <a href="{{ url_for('auth.register') }}">Créer un compte</a>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-  // Petit bonus UX : afficher/masquer le mot de passe
-  (function(){
-    const btn = document.querySelector('.toggle-pass');
-    const input = document.getElementById('password');
-    if (btn && input) {
-      btn.addEventListener('click', () => {
-        const isPwd = input.type === 'password';
-        input.type = isPwd ? 'text' : 'password';
-        btn.setAttribute('aria-pressed', String(isPwd));
-      });
-    }
-  })();
+(function() {
+  var btn   = document.getElementById('toggleBtn');
+  var input = document.getElementById('password');
+  var icon  = document.getElementById('eyeIcon');
+  if (btn && input) {
+    btn.addEventListener('click', function() {
+      var isPwd = input.type === 'password';
+      input.type = isPwd ? 'text' : 'password';
+      icon.className = isPwd ? 'ti ti-eye-off' : 'ti ti-eye';
+      btn.setAttribute('aria-pressed', String(isPwd));
+    });
+  }
+})();
 </script>
 {% endblock %}

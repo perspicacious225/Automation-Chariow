@@ -1,4 +1,3 @@
-# webhook_app/auth/routes.py
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from webhook_app.utils.auth_pg import (
@@ -10,12 +9,11 @@ auth_bp = Blueprint(
     "auth",
     __name__,
     url_prefix="/auth",
-    template_folder="templates" 
+    template_folder="templates"
 )
 
 @auth_bp.record_once
 def _init_users_schema(state):
-    """Appelé une seule fois quand le blueprint est enregistré."""
     app = state.app
     with app.app_context():
         try:
@@ -24,46 +22,55 @@ def _init_users_schema(state):
         except Exception:
             app.logger.exception("ensure_users_schema failed")
 
+
 @auth_bp.route("/register", methods=["GET", "POST"])
 def register():
-    # Politique: inscription ouverte seulement si aucun utilisateur n'existe,
-    # sinon, réservée aux admins déjà connectés.
     if users_count() > 0 and (not current_user.is_authenticated or not current_user.is_admin):
-        flash("Inscription fermée (réservée à l’admin).", "warning")
         return redirect(url_for("auth.login"))
 
+    error = None
+    prefill_email = ""
+
     if request.method == "POST":
-        email = request.form.get("email", "")
+        email    = request.form.get("email", "").strip()
         password = request.form.get("password", "")
         is_admin = bool(request.form.get("is_admin"))
+        prefill_email = email
 
         if not email or not password:
-            flash("Email et mot de passe requis.", "danger")
-            return render_template("auth/register.html")
+            error = "Email et mot de passe requis."
+        elif get_user_by_email(email):
+            error = "Cet email est déjà utilisé."
+        else:
+            user = create_user(email, password, is_admin=is_admin)
+            login_user(user, remember=True)
+            return redirect(url_for("dashboard.dashboard_view"))
 
-        if get_user_by_email(email):
-            flash("Email déjà utilisé.", "danger")
-            return render_template("auth/register.html")
+    return render_template("auth/register.html", error=error, prefill_email=prefill_email)
 
-        user = create_user(email, password, is_admin=is_admin)
-        login_user(user, remember=True)
-        return redirect(url_for("dashboard.dashboard_view"))
-
-    return render_template("auth/register.html")
 
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
+    error = None
+    prefill_email = ""
+
     if request.method == "POST":
-        email = request.form.get("email", "")
+        email    = request.form.get("email", "").strip()
         password = request.form.get("password", "")
+        prefill_email = email
         user = get_user_by_email(email)
-        if not user or not verify_password(user, password):
-            flash("Identifiants invalides.", "danger")
-            return render_template("auth/login.html")
-        login_user(user, remember=True)
-        nxt = request.args.get("next") or url_for("dashboard.dashboard_view")
-        return redirect(nxt)
-    return render_template("auth/login.html")
+
+        if not email or not password:
+            error = "Email et mot de passe requis."
+        elif not user or not verify_password(user, password):
+            error = "Identifiants invalides. Vérifiez votre email et mot de passe."
+        else:
+            login_user(user, remember=True)
+            nxt = request.args.get("next") or url_for("dashboard.dashboard_view")
+            return redirect(nxt)
+
+    return render_template("auth/login.html", error=error, prefill_email=prefill_email)
+
 
 @auth_bp.route("/logout")
 @login_required

@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Auth{% endblock %} — Digitech Hub</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+
+  <style>
+    :root {
+      --bg-deep:      #060E1C;
+      --bg-base:      #0A1628;
+      --bg-surface:   #0D1F3C;
+      --bg-elevated:  #112240;
+      --border:       #1E3A5F;
+      --blue:         #1E6FD9;
+      --blue-light:   #29ABE2;
+      --cyan:         #00D4FF;
+      --green:        #1D9E75;
+      --red:          #E24B4A;
+      --text-primary: #E8EDF5;
+      --text-muted:   #4A7FA8;
+      --text-secondary: #8899AA;
+      --font-main:    'Space Grotesk', sans-serif;
+      --font-mono:    'JetBrains Mono', monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      min-height: 100vh;
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      font-family: var(--font-main);
+      font-size: 13px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Grille de fond ───────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(30,111,217,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(30,111,217,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Glow central ────────────────────────────────────── */
+    body::after {
+      content: '';
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -60%);
+      width: 600px;
+      height: 400px;
+      background: radial-gradient(ellipse, rgba(30,111,217,0.08) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Wrapper centré ──────────────────────────────────── */
+    .auth-outer {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ── Logo ────────────────────────────────────────────── */
+    .auth-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 32px;
+      text-decoration: none;
+    }
+
+    .auth-logo-icon {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--blue), var(--blue-light));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 20px;
+      color: #fff;
+      position: relative;
+      flex-shrink: 0;
+      box-shadow: 0 0 24px rgba(30,111,217,0.3);
+    }
+
+    .auth-logo-icon::after {
+      content: '';
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      width: 8px;
+      height: 8px;
+      background: var(--cyan);
+      border-radius: 2px;
+      border: 2px solid var(--bg-deep);
+    }
+
+    .auth-logo-name {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.01em;
+    }
+
+    .auth-logo-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 1px;
+    }
+
+    /* ── Card auth ───────────────────────────────────────── */
+    .auth-card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--bg-surface);
+      border: 0.5px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.4), 0 0 0 0.5px rgba(30,111,217,0.1);
+      animation: card-in 0.3s cubic-bezier(.4,0,.2,1);
+    }
+
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Titre ───────────────────────────────────────────── */
+    .auth-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+
+    .auth-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+
+    /* ── Champs ──────────────────────────────────────────── */
+    .auth-field {
+      margin-bottom: 16px;
+    }
+
+    .auth-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 6px;
+    }
+
+    .auth-input {
+      width: 100%;
+      background: #060E1C;
+      border: 0.5px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--text-primary);
+      font-size: 13px;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+      font-family: var(--font-main);
+    }
+
+    .auth-input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(30,111,217,0.12);
+    }
+
+    .auth-input::placeholder {
+      color: #2A4A6B;
+    }
+
+    /* ── Password toggle ─────────────────────────────────── */
+    .password-wrap {
+      position: relative;
+    }
+
+    .password-wrap .auth-input {
+      padding-right: 40px;
+    }
+
+    .toggle-pass {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 16px;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      transition: color .2s;
+    }
+
+    .toggle-pass:hover { color: var(--blue-light); }
+
+    /* ── Checkbox admin ──────────────────────────────────── */
+    .auth-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .auth-check input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--blue);
+      cursor: pointer;
+    }
+
+    /* ── Bouton submit ───────────────────────────────────── */
+    .auth-btn {
+      width: 100%;
+      padding: 11px;
+      border-radius: 8px;
+      border: none;
+      background: linear-gradient(135deg, var(--blue), var(--blue-light));
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: var(--font-main);
+      transition: opacity .2s, transform .2s;
+      margin-top: 8px;
+    }
+
+    .auth-btn:hover { opacity: .9; transform: translateY(-1px); }
+    .auth-btn:active { transform: translateY(0); }
+
+    /* ── Lien alternatif ─────────────────────────────────── */
+    .auth-alt {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .auth-alt a {
+      color: var(--blue-light);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .auth-alt a:hover { text-decoration: underline; }
+
+    /* ── Flash messages ──────────────────────────────────── */
+    .flash-stack {
+      width: 100%;
+      max-width: 400px;
+      margin-bottom: 12px;
+    }
+
+    .flash {
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      animation: flash-in 0.3s ease;
+    }
+
+    @keyframes flash-in {
+      from { opacity: 0; transform: translateX(10px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    .flash-success { background: #0F3D2C; border: 0.5px solid rgba(29,158,117,0.4); color: #4ECBA3; }
+    .flash-error   { background: #3D1010; border: 0.5px solid rgba(226,75,74,0.4);  color: #F08080; }
+    .flash-info    { background: #0D2040; border: 0.5px solid rgba(30,111,217,0.4); color: var(--blue-light); }
+
+    /* ── Divider ─────────────────────────────────────────── */
+    .auth-divider {
+      height: 0.5px;
+      background: var(--border);
+      margin: 20px 0;
+    }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  </style>
+
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+
+<div class="auth-outer">
+
+  <!-- Logo -->
+  <a href="/dashboard/" class="auth-logo">
+    <div class="auth-logo-icon">D</div>
+    <div>
+      <div class="auth-logo-name">DIGITECH HUB</div>
+      <div class="auth-logo-sub">Plateforme de gestion</div>
+    </div>
+  </a>
+
+  <!-- Flash messages -->
+  <div class="flash-stack">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+  </div>
+
+  <!-- Contenu -->
+  {% block content %}{% endblock %}
+
+</div>
+
+{% block scripts %}{% endblock %}
+
+</body>
+</html>
