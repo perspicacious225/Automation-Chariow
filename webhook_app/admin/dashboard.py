@@ -584,6 +584,7 @@ def manage_mappings():
 
     # Pour une requête GET, on affiche simplement la page
     current_mappings = read_mappings_from_db()
+    print("DEBUG mappings:", current_mappings) 
     return render_template("dashboard/mappings.html", mappings=current_mappings)
 
 

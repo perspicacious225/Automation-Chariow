@@ -911,6 +911,17 @@ def upsert_template(product_id, template_type, channel, subject, body, is_full_h
                 VALUES (%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (pid_norm, template_type, channel, subject, body, bool(is_full_html), bool(is_active)))
+            
+    if pid_norm:
+            execute_with_retry(
+                conn,
+                """
+                INSERT INTO dim_product (product_id, product_name, first_seen)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (product_id) DO NOTHING
+                """,
+                (pid_norm, pid_norm),
+            )
 
 
 def get_template(product_id, template_type, channel):

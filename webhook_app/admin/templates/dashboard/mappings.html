@@ -88,12 +88,14 @@
       <i class="ti ti-database" style="font-size:16px;color:#4A7FA8;"></i>
       Mappings actuels
       <span style="font-size:11px;color:#4A7FA8;font-weight:400;">
-        — {% set total = mappings.values() | sum(attribute='__len__') %}{{ total }} mapping{{ 's' if total != 1 }}
+        {% set total = namespace(n=0) %}
+        {% for folder_ids in mappings.values() %}
+        {% set total.n = total.n + folder_ids|length %}{% endfor %}
+        — {{ total.n }} mapping{{ 's' if total.n != 1 }}
       </span>
     </div>
 
-    {% set has_mappings = mappings.values() | list | length > 0 %}
-    {% if has_mappings %}
+    {% if mappings %}
       <div style="display:flex;flex-direction:column;gap:8px;">
         {% for product_id, folder_ids in mappings.items() %}
           {% for folder_id in folder_ids %}
