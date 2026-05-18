@@ -13,12 +13,14 @@ Point central qui coordonne :
 
 import logging
 from typing import Optional
-import re
+
+import re as _re
 
 from webhook_app.conversation.state_machine import StateMachine
 from webhook_app.conversation.context_builder import ContextBuilder
 from webhook_app.llm.engine import LLMEngine
 from webhook_app.services.whatsapp import WhatsAppService
+from webhook_app.database_pg import get_connection, execute_with_retry
 
 
 
@@ -44,6 +46,238 @@ _wa = WhatsAppService()
 
 logger = logging.getLogger(__name__)
 
+
+def _convert_markdown_to_whatsapp(text: str) -> str:
+    """
+    Convertit le formatage Markdown du LLM vers le formatage natif WhatsApp.
+
+    Markdown (LLM)     WhatsApp
+    **texte**       →  *texte*   (gras)
+    *texte*         →  _texte_   (italique)
+    **url**         →  url       (supprimer ** autour des URLs)
+    `url`           →  url       (supprimer backticks autour des URLs)
+    """
+    # Étape 1 — Nettoyer les ** ou __ autour des URLs
+    text = _re.sub(r'\*{1,2}(https?://[^\s*]+)\*{1,2}', r'\1', text)
+    text = _re.sub(r'_{1,2}(https?://[^\s_]+)_{1,2}', r'\1', text)
+    text = _re.sub(r'`(https?://[^\s`]+)`', r'\1', text)
+
+    # — Gras : **texte** → marqueur temporaire §§texte§§
+
+    text = _re.sub(r'\*\*(.+?)\*\*', r'§§\1§§', text)
+
+    # — Italique : *texte* → _texte_
+    text = _re.sub(r'\*(.+?)\*', r'_\1_', text)
+
+    # Convertir le marqueur temporaire en gras WhatsApp
+    text = _re.sub(r'§§(.+?)§§', r'*\1*', text)
+
+    # Supprimer les backticks résiduels autour du texte
+    text = _re.sub(r'`([^`]+)`', r'\1', text)
+
+    return text
+
+
+# States réservés aux webhooks Fedapay — jamais via LLM
+WEBHOOK_ONLY_STATES = {"payment_failed", "payment_abandoned", "payment_success"}
+
+# States nécessitant un paiement vérifié pour la transition
+PAYMENT_REQUIRED_STATES = {"post_sale", "support"}
+
+# Pattern de détection du tag STATE
+_STATE_TAG_PATTERN = _re.compile(
+    r'\[STATE:(new_prospect|interested_lead|pre_sale|payment_failed|'
+    r'payment_abandoned|payment_success|post_sale|support|escalation)\]'
+)
+
+WEBHOOK_ONLY_STATES    = {"payment_failed", "payment_abandoned", "payment_success"}
+PAYMENT_REQUIRED_STATES = {"post_sale", "support"}
+
+def _extract_state_tag(
+    response_text: str,
+    current_state: str,
+    conversation: dict,
+) -> tuple[str, str | None, bool]:  
+    """
+    Extrait le tag [STATE:xxx] inséré par le LLM.
+    Retourne (clean_response, detected_state, tag_present)
+
+    tag_present = True si le LLM a inséré un tag — même si bloqué
+    """
+    clean_response = _STATE_TAG_PATTERN.sub('', response_text).strip()
+
+    match = _STATE_TAG_PATTERN.search(response_text)
+    if not match:
+        return clean_response, None, False  # ← tag absent
+
+    detected_state = match.group(1)
+
+    # Validation 1 — Bloquer les states réservés aux webhooks
+    if detected_state in WEBHOOK_ONLY_STATES:
+        logger.warning(
+            "LLM a tenté de setter un state webhook-only : %s — ignoré",
+            detected_state,
+        )
+        return clean_response, None, True  # 
+
+    # Validation 2 — Bloquer la transition vers post_sale/support
+    # si le paiement n'est pas vérifié ET qu'on vient d'un état non-payé
+    if detected_state in PAYMENT_REQUIRED_STATES:
+        if current_state not in PAYMENT_REQUIRED_STATES:
+            if not _is_payment_verified(conversation):
+                logger.warning(
+                    "Transition %s → %s bloquée — paiement non vérifié "
+                    "(last_sale_id=%s)",
+                    current_state,
+                    detected_state,
+                    conversation.get("last_sale_id"),
+                )
+                return clean_response, None, True  
+
+    logger.info(
+        "State LLM validé : %s → %s",
+        current_state,
+        detected_state,
+    )
+    return clean_response, detected_state, True  
+
+
+def _is_payment_verified(conversation: dict) -> bool:
+    """
+    Vérification paiement en 4 niveaux par priorité.
+
+    Niveau 1 : last_sale_id → completed direct
+    Niveau 2 : email connu → completed (même email, numéro différent)
+    Niveau 3 : phone connu → completed (même numéro, email différent)
+    Niveau 4 : échec → False → LLM demandera email/numéro manuellement
+
+    Si un niveau 2 ou 3 trouve un paiement completed :
+    → Met à jour last_sale_id dans conversations automatiquement
+    """
+    last_sale_id = conversation.get("last_sale_id")
+    product_id   = conversation.get("product_id")
+    conv_id      = str(conversation.get("id", ""))
+    phone_raw    = conversation.get("phone", "").replace("+", "").replace("@c.us", "")
+    phone_suffix = phone_raw[-8:] if len(phone_raw) >= 8 else phone_raw
+
+    try:
+        
+        from webhook_app.database_conv import update_conversation_context
+
+        with get_connection(readonly=True) as conn:
+
+            # ── Niveau 1 — last_sale_id direct ────────────────────────────────
+            if last_sale_id:
+                row = execute_with_retry(
+                    conn,
+                    "SELECT status FROM fact_sales WHERE sale_id = %s LIMIT 1",
+                    (last_sale_id,),
+                    fetch="one"
+                )
+                if row and row["status"] == "completed":
+                    logger.debug(
+                        "_is_payment_verified L1 : sale_id=%s → completed ✅",
+                        last_sale_id,
+                    )
+                    return True
+                logger.debug(
+                    "_is_payment_verified L1 : sale_id=%s → %s — passage L2",
+                    last_sale_id,
+                    row["status"] if row else "not_found",
+                )
+
+            # Récupérer l'email depuis le last_sale_id pour le Niveau 2
+            known_email = None
+            if last_sale_id:
+                email_row = execute_with_retry(
+                    conn,
+                    "SELECT email FROM fact_sales WHERE sale_id = %s LIMIT 1",
+                    (last_sale_id,),
+                    fetch="one"
+                )
+                if email_row:
+                    known_email = email_row.get("email")
+
+            # ── Niveau 2 — email connu (priorité haute) ───────────────────────
+            # Cas fréquent : même email, numéro de paiement différent (Orange → MTN)
+            if known_email and product_id:
+                row = execute_with_retry(
+                    conn,
+                    """
+                    SELECT sale_id FROM fact_sales
+                    WHERE email = %s
+                    AND product_id = %s
+                    AND status = 'completed'
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                    """,
+                    (known_email, product_id),
+                    fetch="one"
+                )
+                if row:
+                    new_sale_id = row["sale_id"]
+                    logger.info(
+                        "_is_payment_verified L2 : email=%s → completed "
+                        "sale_id=%s ✅ — update last_sale_id",
+                        known_email, new_sale_id,
+                    )
+                    if conv_id:
+                        update_conversation_context(
+                            conv_id, last_sale_id=new_sale_id
+                        )
+                        conversation["last_sale_id"] = new_sale_id
+                    return True
+                logger.debug(
+                    "_is_payment_verified L2 : email=%s → pas de completed — passage L3",
+                    known_email,
+                )
+
+            # ── Niveau 3 — phone connu ────────────────────────────────────────
+            # Cas : même numéro WhatsApp, email différent lors du retry
+            if phone_suffix and product_id:
+                row = execute_with_retry(
+                    conn,
+                    """
+                    SELECT sale_id FROM fact_sales
+                    WHERE phone LIKE %s
+                    AND product_id = %s
+                    AND status = 'completed'
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                    """,
+                    (f"%{phone_suffix}", product_id),
+                    fetch="one"
+                )
+                if row:
+                    new_sale_id = row["sale_id"]
+                    logger.info(
+                        "_is_payment_verified L3 : phone suffix=%s → completed "
+                        "sale_id=%s ✅ — update last_sale_id",
+                        phone_suffix, new_sale_id,
+                    )
+                    if conv_id:
+                        update_conversation_context(
+                            conv_id, last_sale_id=new_sale_id
+                        )
+                        conversation["last_sale_id"] = new_sale_id
+                    return True
+                logger.debug(
+                    "_is_payment_verified L3 : phone=%s → pas de completed — L4",
+                    phone_suffix,
+                )
+
+            # ── Niveau 4 — échec total ────────────────────────────────────────
+            # Le LLM va demander email/numéro manuellement via [VERIFY_PAYMENT]
+            logger.info(
+                "_is_payment_verified : L1+L2+L3 échoués → False "
+                "(conv=%s product=%s)",
+                conv_id, product_id,
+            )
+            return False
+
+    except Exception as e:
+        logger.warning("_is_payment_verified — erreur DB : %s", e)
+        return False
 
 class ConversationManager:
     """
@@ -72,7 +306,7 @@ class ConversationManager:
         1. Idempotence — message déjà traité ?
         2. Blacklist — numéro bloqué ?
         3. Récupérer / créer la conversation
-        4. IA active ? Sinon → log et stop
+        4. IA active ? Sinon -> log et stop
         5. Heures d'ouverture — on est ouvert ?
         6. Sauvegarder le message utilisateur
         7. Construire le contexte LLM
@@ -107,7 +341,7 @@ class ConversationManager:
             conv_id, current_state, ai_active,
         )
 
-        # 4. IA désactivée → humain en main, on log uniquement
+        # 4. IA désactivée -> humain en main, on log uniquement
         if not ai_active:
             logger.info(
                 "IA désactivée sur conversation %s — message loggé sans réponse auto.",
@@ -168,7 +402,7 @@ class ConversationManager:
         sale_matches_product = False
         if current_sale_id and current_product:
             try:
-                from webhook_app.database_pg import get_connection, execute_with_retry
+                
                 with get_connection(readonly=True) as conn:
                     row = execute_with_retry(
                         conn,
@@ -239,12 +473,15 @@ class ConversationManager:
             user_message=text + context_note,  # context_note = "" si pas de vérification
         )
 
-       
+        use_cache = len(history) >= 2
+    
         # Appel LLM direct — le modèle juge seul si escalade nécessaire
         try:
             response_text, chunk_ids = self.llm_engine.generate(
                 system_prompt=context["system_prompt"],
                 messages=context["messages"],
+                dynamic_context=context.get("dynamic_context", ""),
+                use_cache=use_cache,
             )
         except Exception as e:
             logger.exception("Erreur LLM pour conversation %s : %s", conv_id, e)
@@ -258,7 +495,7 @@ class ConversationManager:
         escalade_requise = "[ESCALADE_REQUISE]" in response_text
 
         # ── Détecter tag VERIFY_PAYMENT ───────────────────────────────
-        import re as _re
+    
         verify_match = _re.search(r'\[VERIFY_PAYMENT:([^\]]+)\]', response_text)
 
         if verify_match:
@@ -338,7 +575,17 @@ class ConversationManager:
         logger.info("escalade_requise : %s", escalade_requise)
         logger.info("======================")
 
-        response_clean = re.sub(r'\[ESCALADE_REQUISE\]', '', response_text).strip()
+        response_clean = _re.sub(r'\[ESCALADE_REQUISE\]', '', response_text).strip()
+
+        # ── Extraction du tag STATE inséré par le LLM 
+
+        response_clean, llm_detected_state, tag_present = _extract_state_tag(
+            response_text=response_clean,
+            current_state=current_state,
+            conversation=conversation,
+        )
+
+        response_clean = _convert_markdown_to_whatsapp(response_clean)
 
         # 9. Sauvegarder la réponse assistant
         save_message(
@@ -351,7 +598,6 @@ class ConversationManager:
             },
         )
 
-        # 10. Envoyer via WhatsApp
         try:
             _wa.send_message_direct(
                 chatId=phone,
@@ -363,7 +609,7 @@ class ConversationManager:
 
         # 11. Escalade automatique + log
         if escalade_requise:
-            logger.info("→ Déclenchement _handle_escalade pour conv=%s phone=%s", conv_id, phone)
+            logger.info("-> Déclenchement _handle_escalade pour conv=%s phone=%s", conv_id, phone)
             # Enregistrer dans escalation_log
             log_escalation(
                 conversation_id=conv_id,
@@ -373,21 +619,43 @@ class ConversationManager:
             )
             _handle_escalade(conv_id, phone, response_clean)
         else:
-            logger.info("→ Pas d'escalade détectée")
+            logger.info("-> Pas d'escalade détectée")
 
-        # 12. Transition d'état
-        new_state = self.state_machine.transition(
-            current_state=current_state,
-            user_message=text,
-            assistant_response=response_clean,
-            conversation=conversation,
-        )
-        if new_state and new_state != current_state:
-            update_conversation_state(conv_id, new_state)
-            logger.info(
-                "Transition état : %s → %s (conversation %s)",
-                current_state, new_state, conv_id,
+
+        #12. ── Transition d'état 
+
+        # Priorité 1 — tag LLM validé
+
+        if tag_present:
+            if llm_detected_state and  llm_detected_state != current_state:
+            
+                update_conversation_state(conv_id, llm_detected_state)
+                logger.info(
+                    "Transition LLM : %s → %s (conversation %s)",
+                    current_state, llm_detected_state, conv_id,
+                )
+            else:
+                logger.info(
+                    "State LLM confirmé : %s (pas de transition)",
+                    current_state,
+                )
+
+        # Priorité 2 — state machine comme fallback si tag absent
+        else:
+            new_state = self.state_machine.transition(
+                current_state=current_state,
+                user_message=text,
+                assistant_response=response_clean,
+                conversation=conversation,
             )
+            if new_state and new_state != current_state:
+                update_conversation_state(conv_id, new_state)
+                logger.info(
+                    "Transition fallback : %s → %s (conversation %s)",
+                    current_state, new_state, conv_id,
+                )
+
+
 
     # ──────────────────────────────────────────────────────────────────────
     # LIAISON AVEC LES WEBHOOKS PAIEMENT (CHARIOW v1)
@@ -407,7 +675,7 @@ class ConversationManager:
 
         event_type : "successful.sale" | "failed.sale" | "abandoned.sale"
         """
-        # Mapping événement → état conversationnel
+        # Mapping événement -> état conversationnel
         event_to_state = {
             "successful.sale": "payment_success",
             "failed.sale": "payment_failed",
@@ -460,7 +728,7 @@ def _handle_escalade(conv_id: str, phone: str, last_message: str) -> None:
 
     # 2. Mettre l'état en escalation
     update_conversation_state(conv_id, "escalation")
-    logger.info("État → escalation conv=%s", conv_id)
+    logger.info("État -> escalation conv=%s", conv_id)
 
     # 3. Générer le résumé via Claude
     summary = _generate_escalation_summary(conv_id, last_message)

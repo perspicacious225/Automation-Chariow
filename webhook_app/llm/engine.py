@@ -32,40 +32,32 @@ class LLMEngine:
         self.provider = (Config.LLM_PROVIDER or "anthropic").lower()
         self._client = None
 
+
+        
     def generate(
         self,
         system_prompt: str,
         messages: list[dict],
         *,
+        dynamic_context: str = "",
+        use_cache: bool = True,    
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
     ) -> tuple[str, list[str]]:
-        """
-        Génère une réponse du LLM.
 
-        Args:
-            system_prompt : prompt système complet (rôle + RAG + contexte TX)
-            messages      : historique au format [{role, content}, ...]
-                            Le dernier message est le message utilisateur courant.
-            max_tokens    : limite de tokens (défaut : Config.LLM_MAX_TOKENS)
-            temperature   : créativité (0.0 = déterministe, 1.0 = créatif)
-
-        Retourne :
-            response_text : str       — réponse générée
-            chunk_ids     : list[str] — toujours [] ici (passés via metadata)
-        """
         max_tokens = max_tokens or Config.LLM_MAX_TOKENS
 
         if self.provider == "anthropic":
             return self._generate_anthropic(
-                system_prompt, messages, max_tokens, temperature
+                system_prompt, messages, max_tokens, temperature,
+                dynamic_context=dynamic_context,
+                use_cache=use_cache,              
             )
         elif self.provider == "openai":
             return self._generate_openai(
-                system_prompt, messages, max_tokens, temperature
+                system_prompt, messages, max_tokens, temperature,
+                dynamic_context=dynamic_context,  
             )
-        else:
-            raise ValueError(f"Provider LLM inconnu : {self.provider}")
 
     # ──────────────────────────────────────────────────────────────────────
     # ANTHROPIC — CLAUDE
@@ -83,13 +75,33 @@ class LLMEngine:
         messages: list[dict],
         max_tokens: int,
         temperature: float,
+        dynamic_context: str = "",  
+        use_cache=True,
     ) -> tuple[str, list]:
 
         client = self._get_anthropic_client()
-
-        # Anthropic exige que le premier message soit role="user"
-        # et que les rôles alternent strictement user/assistant
         clean_messages = _sanitize_messages_anthropic(messages)
+
+        # ── Construction des blocs système 
+        # Bloc 1 — Statique (base + state) → mis en cache
+        # Éligible au cache si >= 1 024 tokens
+        # TTL : 5 minutes côté Anthropic 
+
+        static_block = {
+        "type": "text",
+        "text": system_prompt,
+            }
+        if use_cache:
+            static_block["cache_control"] = {"type": "ephemeral"}
+
+        system_blocks = [static_block]
+        # Bloc 2 — Dynamique (contexte client + RAG) → jamais mis en cache
+        # Change à chaque appel → inutile de cacher
+        if dynamic_context:
+            system_blocks.append({
+                "type": "text",
+                "text": dynamic_context,
+            })
 
         for attempt in range(3):
             try:
@@ -97,24 +109,43 @@ class LLMEngine:
                     model=Config.LLM_MODEL,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    system=system_prompt,
+                    system=system_blocks,
                     messages=clean_messages,
                 )
                 text = response.content[0].text if response.content else ""
+
+                # ── Log tokens avec détail cache 
+                usage         = response.usage
+                cache_read    = getattr(usage, "cache_read_input_tokens", 0) or 0
+                cache_created = getattr(usage, "cache_creation_input_tokens", 0) or 0
+
                 logger.debug(
-                    "Anthropic — tokens used: input=%d output=%d",
-                    response.usage.input_tokens,
-                    response.usage.output_tokens,
+                    "Anthropic — input=%d output=%d | cache_read=%d cache_write=%d",
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    cache_read,
+                    cache_created,
                 )
+
+                if cache_read > 0:
+                    logger.info(
+                        "Cache HIT — %d tokens servis depuis cache",
+                        cache_read,
+                    )
+                elif cache_created > 0:
+                    logger.info(
+                        "Cache WRITE — %d tokens mis en cache",
+                        cache_created,
+                    )
+
                 return text.strip(), []
 
             except Exception as e:
                 err = str(e).lower()
-                # Rate limit → retry exponentiel
-                if "rate_limit" in err or "overloaded" in err:
-                    wait = 2 ** attempt
+                if "rate_limit" in err or "overloaded" in err or "529" in err:
+                    wait = 2 ** (attempt + 1)
                     logger.warning(
-                        "Anthropic rate limit — attente %ds (tentative %d/3)",
+                        "Anthropic rate limit or surchargé (529) — attente %ds (tentative %d/3)",
                         wait, attempt + 1
                     )
                     time.sleep(wait)
@@ -140,12 +171,17 @@ class LLMEngine:
         messages: list[dict],
         max_tokens: int,
         temperature: float,
+        dynamic_context: str = "",  # ← AJOUTER
     ) -> tuple[str, list]:
 
         client = self._get_openai_client()
 
-        # OpenAI accepte le system prompt comme premier message role="system"
-        openai_messages = [{"role": "system", "content": system_prompt}]
+        # OpenAI → pas de cache natif → fusionner statique + dynamique
+        full_system = system_prompt
+        if dynamic_context:
+            full_system = system_prompt + "\n" + dynamic_context
+
+        openai_messages = [{"role": "system", "content": full_system}]
         openai_messages.extend(messages)
 
         for attempt in range(3):

@@ -255,9 +255,49 @@ class Notifier:
                     if ok_wa:
                         self.db.mark_notified(
                             sale.id, "whatsapp", template_type, wa_key,
-                            recipient_phone=phone_key, contact_key=contact_key, product_id=product_key, ab_arm=ab_arm
+                            recipient_phone=phone_key, contact_key=contact_key,
+                            product_id=product_key, ab_arm=ab_arm
                         )
-                        logger.info("[SENT][whatsapp] sale=%s template=%s to=%s", sale.id, template_type, wa_key)
+                        logger.info("[SENT][whatsapp] sale=%s template=%s to=%s",
+                                    sale.id, template_type, wa_key)
+
+                        #  sauvegarder dans l'historique conversationnel ──
+                        try:
+                            from webhook_app.database_conv import (
+                                get_or_create_conversation, save_message
+                            )
+                            phone_normalized = "+" + phone_key + "@c.us"
+                            conv = get_or_create_conversation(
+                                phone=phone_normalized,
+                                product_id=sale.product_id,
+                                last_sale_id=sale.id,
+                                initial_state=(
+                                    "payment_success"
+                                    if template_type.startswith("confirm_")
+                                    else "payment_abandoned"
+                                    if sale.status == "abandoned"
+                                    else "payment_failed"
+                                ),
+                            )
+                            save_message(
+                                str(conv["id"]),
+                                role="assistant",
+                                content=wa_msg,
+                                metadata={
+                                    "source": "notifier_v1",
+                                    "template_type": template_type,
+                                    "sale_id": sale.id,
+                                },
+                            )
+                            logger.info(
+                                "[CONV] message v1 sauvegardé — conv=%s template=%s",
+                                conv["id"], template_type,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "[CONV] sauvegarde message v1 échouée (non bloquant) : %s", e
+                            )
+                        # ─────────────────────────────────────────────────────────────
             else:
                 logger.info("[SKIP][whatsapp] template manquant pour '%s'", template_type)
         else:

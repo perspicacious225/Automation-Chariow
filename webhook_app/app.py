@@ -1,7 +1,7 @@
 # webhook_app/app.py
 from flask import Flask, request, jsonify, redirect, url_for
 from flask_cors import CORS
-import json, os, logging, hmac, hashlib          # ← CORRIGÉ : ajout hmac, hashlib
+import json, os, logging, hmac, hashlib         
 from webhook_app.admin.dashboard import dashboard_bp, dashboard_view
 
 from webhook_app.database_pg import (
@@ -287,14 +287,27 @@ def create_app():
     with app.app_context():
         try:
             from webhook_app.database_v21 import init_default_prompts
-            from webhook_app.conversation.context_builder import BASE_SYSTEM_PROMPT
-            from webhook_app.llm.prompts import STATE_PROMPTS
+            from webhook_app.llm.prompts import (
+                STATE_PROMPTS,
+                BASE_SYSTEM_PROMPT,
+                BASE_SYSTEM_PROMPT_EN,
+                BASE_PROMPT_VENDOR_FR,
+                BASE_PROMPT_VENDOR_EN,
+                BASE_PROMPT_SUPPORT_FR,
+                BASE_PROMPT_SUPPORT_EN,
+                DEFAULT_STATE_PROMPT,
+            )
+
 
             default_prompts = {
                 "base": {
                     "label": "Prompt système de base",
                     "content": BASE_SYSTEM_PROMPT,
-                }
+                },
+                "base_en": {
+                    "label": "Prompt système de base (EN)",
+                    "content": BASE_SYSTEM_PROMPT_EN,
+                },
             }
 
             # Ajouter tous les prompts d'état
@@ -310,6 +323,7 @@ def create_app():
                 "escalation":        "Escalade",
             }
 
+            # States prompts
             for key, label in state_labels.items():
                 content = STATE_PROMPTS.get(key, "")
                 if content:
@@ -317,6 +331,30 @@ def create_app():
                         "label": label,
                         "content": content,
                     }
+
+            # Prompt par défaut
+            default_prompts["default"] = {
+                "label": "Prompt par défaut (état indéterminé)",
+                "content": DEFAULT_STATE_PROMPT,
+            }
+
+            # Prompts adaptatifs compressés
+            default_prompts["base_vendor"] = {
+                "label": "Prompt vendeur FR (compressé)",
+                "content": BASE_PROMPT_VENDOR_FR,
+            }
+            default_prompts["base_vendor_en"] = {
+                "label": "Prompt vendeur EN (compressé)",
+                "content": BASE_PROMPT_VENDOR_EN,
+            }
+            default_prompts["base_support"] = {
+                "label": "Prompt support FR (compressé)",
+                "content": BASE_PROMPT_SUPPORT_FR,
+            }
+            default_prompts["base_support_en"] = {
+                "label": "Prompt support EN (compressé)",
+                "content": BASE_PROMPT_SUPPORT_EN,
+            }
 
             init_default_prompts(default_prompts)
 

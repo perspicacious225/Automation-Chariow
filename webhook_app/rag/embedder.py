@@ -4,8 +4,6 @@ rag/embedder.py — Génération d'embeddings via Voyage AI
 Convertit du texte en vecteur float[1024] via voyage-4-lite.
 Utilisé par le pipeline d'ingestion ET par le moteur de recherche RAG.
 
-Voyage AI est le partenaire officiel d'Anthropic pour les embeddings.
-200M tokens gratuits à la création du compte.
 """
 
 import logging

@@ -145,25 +145,49 @@ class WhatsAppService:
 
 
     def send_message_direct(self, chatId: str, message: str, conv_id: str | None = None) -> bool:
-        """Envoi avec résolution LID automatique."""
-        # Résoudre le vrai chatId via CheckWhatsapp
+        """Envoi avec résolution LID automatique + retry sur timeout."""
+        import time
+
         resolved = self.resolve_chat_id(chatId, conv_id=conv_id)
         final_id = resolved or chatId
-        
-        try:
-            response = requests.post(
-                Config.API_URL,
-                json={"chatId": final_id, "message": message},
-                timeout=10
-            )
-            logger.info(f"Green API status: {response.status_code} | chatId: {final_id}")
-            logger.info(f"Green API body: {response.text}")
-            response.raise_for_status()
-            logger.info(f"Message sent to {final_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send to {final_id}: {str(e)}")
-            return False
+
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    Config.API_URL,
+                    json={"chatId": final_id, "message": message},
+                    timeout=10
+                )
+                logger.info(f"Green API status: {response.status_code} | chatId: {final_id}")
+                logger.info(f"Green API body: {response.text}")
+                response.raise_for_status()
+                logger.info(f"Message sent to {final_id}")
+                return True
+
+            except requests.exceptions.Timeout:
+                wait = 2 ** (attempt +1)  # 2s, 4s, 8s
+                logger.warning(
+                    "Green API timeout (tentative %d/3) — retry dans %ds | chatId: %s",
+                    attempt + 1, wait, final_id
+                )
+                if attempt < 2:
+                    time.sleep(wait)
+                    continue
+                logger.error(
+                    "Green API : échec après 3 tentatives (timeout) | chatId: %s",
+                    final_id
+                )
+                return False
+
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"Green API connexion impossible : {str(e)}")
+                return False
+
+            except Exception as e:
+                logger.error(f"Failed to send to {final_id}: {str(e)}")
+                return False
+
+        return False
 
 
     def delete_message(self, chat_id: str, message_id: str) -> bool:
