@@ -17,6 +17,9 @@ _SSL_KEYWORDS = (
     "eof detected",
     "ssl connection",
     "connection already closed",
+    "decryption failed",
+    "bad record mac",
+    "ssl error",
 )
 
 
