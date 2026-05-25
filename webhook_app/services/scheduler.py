@@ -1,21 +1,28 @@
 # webhook_app/services/scheduler.py
-import threading, time, json, logging
+import threading
+import time
+import json
+import logging
 from typing import Callable
+
+import psycopg2
+
 from webhook_app.database_pg import (
     fetch_due_scheduled,
     mark_scheduled_error,
     claim_scheduled_job,
     has_confirmation_for_contact_product,
     cancel_cadence_for,
-    fetch_pending_emails,          # ← à ajouter dans database_pg.py
-    mark_pending_email_sent,       # ← à ajouter dans database_pg.py
-    cancel_pending_emails_for,     # ← à ajouter dans database_pg.py
+    fetch_pending_emails,
+    mark_pending_email_sent,
+    cancel_pending_emails_for,
 )
 from webhook_app.models.sale import Sale
 
 logger = logging.getLogger(__name__)
 
-PENDING_EMAIL_THROTTLE_SECONDS = 5   # délai entre chaque email de rattrapage
+PENDING_EMAIL_THROTTLE_SECONDS = 5
+
 
 def _build_sale_from_payload(payload_json: str) -> Sale:
     data = json.loads(payload_json)
@@ -34,9 +41,9 @@ def _process_pending_emails(email_service):
     - Throttle de 5s entre chaque contact
     """
     if not email_service.is_available():
-        return  # Gmail toujours KO, on réessaiera dans 30s
+        return
 
-    jobs = fetch_pending_emails()   # tous les email_pending groupés par contact
+    jobs = fetch_pending_emails()
     if not jobs:
         return
 
@@ -44,29 +51,33 @@ def _process_pending_emails(email_service):
 
     for contact_key, contact_jobs in jobs.items():
         try:
-            # Vérif achat entre-temps
             product_key = contact_jobs[0]["product_id"]
             if has_confirmation_for_contact_product(contact_key, product_key):
-                logger.info("[PENDING][SKIP] achat détecté — annule %s emails contact=%s",
-                            len(contact_jobs), contact_key)
-                for job in contact_jobs:
-                    cancel_pending_emails_for(contact_key, product_key)
+                logger.info(
+                    "[PENDING][SKIP] achat détecté — annule %s emails contact=%s",
+                    len(contact_jobs), contact_key,
+                )
+                cancel_pending_emails_for(contact_key, product_key)
                 continue
 
-            # Trie par due_at DESC → garde le plus récent
             contact_jobs.sort(key=lambda j: j["due_at"], reverse=True)
-            to_send = contact_jobs[0]
+            to_send   = contact_jobs[0]
             to_cancel = contact_jobs[1:]
 
-            # Annule les plus anciens
             for old_job in to_cancel:
-                cancel_pending_emails_for(contact_key, product_key,
-                                          exclude_id=to_send["id"])
-                logger.info("[PENDING][CANCEL] job_id=%s (plus ancien) contact=%s",
-                            old_job["id"], contact_key)
+                cancel_pending_emails_for(
+                    contact_key, product_key, exclude_id=to_send["id"]
+                )
+                logger.info(
+                    "[PENDING][CANCEL] job_id=%s (plus ancien) contact=%s",
+                    old_job["id"], contact_key,
+                )
 
-            # Envoie le plus récent
-            payload = to_send["payload_json"] if isinstance(to_send["payload_json"], dict) else json.loads(to_send["payload_json"])
+            payload = (
+                to_send["payload_json"]
+                if isinstance(to_send["payload_json"], dict)
+                else json.loads(to_send["payload_json"])
+            )
             ok = email_service.send_email(
                 recipient=payload["email_raw"],
                 subject=payload["subject"],
@@ -75,9 +86,14 @@ def _process_pending_emails(email_service):
             )
             if ok:
                 mark_pending_email_sent(to_send["id"], payload)
-                logger.info("[PENDING][SENT] job_id=%s contact=%s", to_send["id"], contact_key)
+                logger.info(
+                    "[PENDING][SENT] job_id=%s contact=%s",
+                    to_send["id"], contact_key,
+                )
             else:
-                logger.warning("[PENDING][FAIL] job_id=%s — sera retenté", to_send["id"])
+                logger.warning(
+                    "[PENDING][FAIL] job_id=%s — sera retenté", to_send["id"]
+                )
 
         except Exception:
             logger.exception("[PENDING][ERR] contact=%s", contact_key)
@@ -85,21 +101,30 @@ def _process_pending_emails(email_service):
         time.sleep(PENDING_EMAIL_THROTTLE_SECONDS)
 
 
+# ── Mots-clés SSL/connexion récupérables ──────────────────────────────────────
+_SSL_KEYWORDS = ("ssl syscall", "eof detected", "ssl connection", "connection reset")
+
+
+def _is_ssl_error(e: Exception) -> bool:
+    return any(kw in str(e).lower() for kw in _SSL_KEYWORDS)
+
+
 def start_scheduler(send_func: Callable[[Sale, str], bool], email_service=None):
     """
     send_func(sale, template_type) -> bool
     email_service : instance EmailService pour le rattrapage email_pending
     """
+
     def worker():
         while True:
             try:
                 # ── Jobs normaux ──────────────────────────────────────────
                 due = fetch_due_scheduled(limit=50)
+
                 for job in due:
                     job_id = job["id"]
-                    tpl = str(job.get("template_type", ""))
+                    tpl    = str(job.get("template_type", ""))
 
-                    # Skip les email_pending (traités séparément)
                     if tpl.startswith("email_pending::"):
                         continue
 
@@ -111,14 +136,17 @@ def start_scheduler(send_func: Callable[[Sale, str], bool], email_service=None):
                         pkey = job.get("product_id")
                         if ckey and pkey and has_confirmation_for_contact_product(ckey, pkey):
                             logger.info(
-                                "[SCHED][SKIP] Relance ignorée (confirmation déjà envoyée) "
-                                "job_id=%s tpl=%s contact=%s product=%s",
-                                job_id, tpl, ckey, pkey
+                                "[SCHED][SKIP] Relance ignorée job_id=%s tpl=%s "
+                                "contact=%s product=%s",
+                                job_id, tpl, ckey, pkey,
                             )
                             try:
                                 n = cancel_cadence_for(ckey, pkey)
-                                logger.info("[CANCEL] cadence supprimée (%s jobs) contact=%s produit=%s",
-                                            n, ckey, pkey)
+                                logger.info(
+                                    "[CANCEL] cadence supprimée (%s jobs) "
+                                    "contact=%s produit=%s",
+                                    n, ckey, pkey,
+                                )
                             except Exception:
                                 logger.exception("Cancel cadence failed")
                             continue
@@ -129,12 +157,29 @@ def start_scheduler(send_func: Callable[[Sale, str], bool], email_service=None):
                         logger.info("[SCHED][SENT] job_id=%s tpl=%s", job_id, tpl)
                     except Exception as e:
                         mark_scheduled_error(job_id, str(e))
-                        logger.exception("[SCHED][ERR] job_id=%s tpl=%s err=%s", job_id, tpl, e)
+                        logger.exception(
+                            "[SCHED][ERR] job_id=%s tpl=%s err=%s", job_id, tpl, e
+                        )
 
-                # ── Rattrapage email_pending ───────────────────────────────
+                # ── Rattrapage email_pending ──────────────────────────────
                 if email_service:
                     _process_pending_emails(email_service)
 
+            # ── Connexion SSL coupée par Supabase (idle timeout) ──────────
+            # Erreur transiente et récupérable — on log un WARNING simple
+            # sans stack trace, le cycle suivant rouvrira une connexion fraîche
+            except psycopg2.OperationalError as e:
+                if _is_ssl_error(e):
+                    logger.warning(
+                        "[SCHED] Connexion DB SSL perdue (idle timeout) "
+                        "— retry dans 30s : %s", e,
+                    )
+                else:
+                    logger.exception(
+                        "[SCHED] Erreur DB OperationalError non récupérable"
+                    )
+
+            # ── Toute autre erreur inattendue ─────────────────────────────
             except Exception:
                 logger.exception("[SCHED] Unhandled scheduler loop error")
 

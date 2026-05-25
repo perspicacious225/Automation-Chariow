@@ -30,7 +30,7 @@ def init_pool():
         dsn = f"postgresql://{user}:{pw}@{host}:{port}/{db}"
 
     minconn = int(os.getenv("PG_MINCONN", "1"))
-    maxconn = int(os.getenv("PG_MAXCONN", "10"))
+    maxconn = int(os.getenv("PG_MAXCONN", "5"))
     _POOL = pool.SimpleConnectionPool(minconn, maxconn, dsn=dsn, keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=5)
     logger.info("PostgreSQL pool initialisé (%s..%s)", minconn, maxconn)
     return _POOL
@@ -60,9 +60,30 @@ def get_connection(readonly: bool = False):
         _POOL.putconn(conn)
 
 
-def execute_with_retry(conn, sql: str, params: Iterable[Any] | None = None, *, fetch: str | None = None):
-    attempts = int(os.getenv("PG_EXEC_RETRIES", "3"))
+def execute_with_retry(
+    conn,
+    sql: str,
+    params: Iterable[Any] | None = None,
+    *,
+    fetch: str | None = None,
+):
+    attempts   = int(os.getenv("PG_EXEC_RETRIES", "3"))
     base_delay = float(os.getenv("PG_EXEC_BASE_DELAY_MS", "100")) / 1000.0
+
+    # Mots-clés signalant une err
+    TRANSIENT_ERRORS = (
+        "deadlock",
+        "timeout",
+        "could not serialize",
+        "connection reset",
+        "connection refused",
+        "terminating connection",
+        # SSL EOF — connexion coupée par Supabase après idle trop long
+        "ssl syscall error",
+        "eof detected",
+        "ssl connection has been closed",
+    )
+
     for i in range(attempts):
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -72,13 +93,41 @@ def execute_with_retry(conn, sql: str, params: Iterable[Any] | None = None, *, f
                 if fetch == "all":
                     return cur.fetchall()
                 return cur.rowcount
+
+        except psycopg2.OperationalError as e:
+            # OperationalError couvre les erreurs SSL et connexion
+            msg = str(e).lower()
+            is_ssl_eof = any(x in msg for x in ("ssl syscall", "eof detected", "ssl connection"))
+
+            if is_ssl_eof:
+                logger.warning(
+                    "Connexion DB SSL perdue (EOF) — tentative %d/%d : %s",
+                    i + 1, attempts, e,
+                )
+                # Marquer la connexion comme invalide pour forcer une reconnexion
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                time.sleep(base_delay * (2 ** i))
+                continue
+
+            # Autres OperationalError non SSL → lever immédiatement
+            raise
+
         except psycopg2.Error as e:
             msg = str(e).lower()
-            # Retry on common transient errors
-            if any(x in msg for x in ["deadlock", "timeout", "could not serialize", "connection reset", "connection refused", "terminating connection"]):
+            if any(x in msg for x in TRANSIENT_ERRORS):
                 time.sleep(base_delay * (2 ** i))
                 continue
             raise
+
+    # Échec après toutes les tentatives
+    raise psycopg2.OperationalError(
+        f"execute_with_retry : échec après {attempts} tentatives."
+    )
+
+
 def read_mappings_from_db():
     """Charge les mappings depuis la base de données et les groupe par produit."""
     sql = """
