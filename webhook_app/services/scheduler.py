@@ -118,7 +118,7 @@ def start_scheduler(send_func: Callable[[Sale, str], bool], email_service=None):
     def worker():
         while True:
             try:
-                # ── Jobs normaux ──────────────────────────────────────────
+                # ── Jobs normaux 
                 due = fetch_due_scheduled(limit=50)
 
                 for job in due:
@@ -180,6 +180,8 @@ def start_scheduler(send_func: Callable[[Sale, str], bool], email_service=None):
                     )
 
             # ── Toute autre erreur inattendue ─────────────────────────────
+            except psycopg2.OperationalError as e:
+                logger.warning("[SCHED] Erreur DB transitoire — retry dans 30s : %s", e)
             except Exception:
                 logger.exception("[SCHED] Unhandled scheduler loop error")
 

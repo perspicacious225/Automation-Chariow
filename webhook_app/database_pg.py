@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 
 _POOL: Optional[pool.SimpleConnectionPool] = None
 
+_SSL_KEYWORDS = (
+    "ssl syscall",
+    "eof detected",
+    "ssl connection",
+    "connection already closed",
+)
+
 
 def init_pool():
     global _POOL
@@ -49,15 +56,34 @@ def get_connection(readonly: bool = False):
     if _POOL is None:
         init_pool()
     assert _POOL is not None
+
     conn = _POOL.getconn()
+    _conn_is_bad = False
+
     try:
-        # Active l'autocommit (DDL possible immédiatement)
+        # Tester la connexion avant de l'utiliser
+        if conn.closed:
+            _conn_is_bad = True
+            _POOL.putconn(conn, close=True)
+            conn = _POOL.getconn()
+
         conn.autocommit = True
-        # Évite de marquer la session en READ ONLY pour ne pas brider les DDL
-        # Les requêtes read-only n'ont pas besoin d'un flag serveur read-only ici.
         yield conn
+
+    except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+        # Connexion SSL morte — la marquer comme mauvaise
+        if any(kw in str(e).lower() for kw in _SSL_KEYWORDS):
+            logger.warning("Connexion DB SSL perdue — connexion détruite du pool : %s", e)
+            _conn_is_bad = True
+        raise
+
     finally:
-        _POOL.putconn(conn)
+        # Si connexion morte → la détruire du pool (close=True)
+        # Si connexion saine → la remettre dans le pool (close=False)
+        try:
+            _POOL.putconn(conn, close=_conn_is_bad)
+        except Exception:
+            pass
 
 
 def execute_with_retry(
@@ -94,25 +120,15 @@ def execute_with_retry(
                     return cur.fetchall()
                 return cur.rowcount
 
-        except psycopg2.OperationalError as e:
-            # OperationalError couvre les erreurs SSL et connexion
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
             msg = str(e).lower()
-            is_ssl_eof = any(x in msg for x in ("ssl syscall", "eof detected", "ssl connection"))
-
-            if is_ssl_eof:
+            if any(kw in msg for kw in _SSL_KEYWORDS):
                 logger.warning(
-                    "Connexion DB SSL perdue (EOF) — tentative %d/%d : %s",
+                    "Connexion DB SSL perdue — tentative %d/%d : %s",
                     i + 1, attempts, e,
                 )
-                # Marquer la connexion comme invalide pour forcer une reconnexion
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                time.sleep(base_delay * (2 ** i))
-                continue
 
-            # Autres OperationalError non SSL → lever immédiatement
+                raise
             raise
 
         except psycopg2.Error as e:
