@@ -32,15 +32,16 @@ CHUNK_MAX_CHARS = 2000
 
 # Sections reconnues dans le format standard Digitech Hub
 KNOWN_SECTIONS = {
+    "informations commerciales": "commercial", 
     "présentation générale": "presentation",
     "promesse": "promesse",
     "contenu détaillé": "contenu",
     "accès après achat": "acces",
+    "protocole d'installation": "installation", 
     "problèmes courants": "support",
     "faq": "faq",
     "objections courantes": "objections",
     "limites": "escalade",
-    "informations commerciales": "commercial",
 }
 
 

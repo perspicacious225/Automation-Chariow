@@ -22,6 +22,8 @@ from webhook_app.llm.engine import LLMEngine
 from webhook_app.services.whatsapp import WhatsAppService
 from webhook_app.database_pg import get_connection, execute_with_retry
 
+from webhook_app.conversation.output_parser import parse_llm_output, validate_output
+
 
 
 from webhook_app.database_conv import (
@@ -56,26 +58,46 @@ def _convert_markdown_to_whatsapp(text: str) -> str:
     *texte*         →  _texte_   (italique)
     **url**         →  url       (supprimer ** autour des URLs)
     `url`           →  url       (supprimer backticks autour des URLs)
+    —               →  :         (tiret long → deux-points)
     """
-    # Étape 1 — Nettoyer les ** ou __ autour des URLs
+
+    # Nettoyer les ** ou __ autour des URLs 
     text = _re.sub(r'\*{1,2}(https?://[^\s*]+)\*{1,2}', r'\1', text)
     text = _re.sub(r'_{1,2}(https?://[^\s_]+)_{1,2}', r'\1', text)
     text = _re.sub(r'`(https?://[^\s`]+)`', r'\1', text)
 
-    # — Gras : **texte** → marqueur temporaire §§texte§§
-
+    # Gras : **texte** → *texte* 
+    # Le marqueur §§ évite les collisions avec l'italique WhatsApp
     text = _re.sub(r'\*\*(.+?)\*\*', r'§§\1§§', text)
 
-    # — Italique : *texte* → _texte_
+    # Italique : *texte* → _texte_ 
     text = _re.sub(r'\*(.+?)\*', r'_\1_', text)
 
-    # Convertir le marqueur temporaire en gras WhatsApp
+    # Convertir marqueur temporaire en gras WhatsApp 
     text = _re.sub(r'§§(.+?)§§', r'*\1*', text)
 
-    # Supprimer les backticks résiduels autour du texte
+    #Supprimer backticks résiduels 
     text = _re.sub(r'`([^`]+)`', r'\1', text)
 
+    # ── Étape 6 — Fix tiret long (—)
+    text = text.replace('\u2014', '—')   
+    text = _re.sub(r'\s—\s', ' : ', text)   
+    text = _re.sub(r'—\s', ': ', text)       
+    text = _re.sub(r'\s—', ',', text)        
+    text = text.replace('—', ' ')        
+
+    # Effacer fragments de checklist hallucinés
+    text = _re.sub(r'\[\s?[xX ]\s?\]', '', text)
+    text = _re.sub(r'COMPOSANTS OBLIGATOIRES.*?:?', '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'INTERDITS ABSOLUS.*?:?', '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'MODE:.*?\n', '', text, flags=_re.IGNORECASE)
+
+    text = _re.sub(r' {2,}', ' ', text)   
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
     return text
+
 
 
 # States réservés aux webhooks Fedapay — jamais via LLM
@@ -84,63 +106,9 @@ WEBHOOK_ONLY_STATES = {"payment_failed", "payment_abandoned", "payment_success"}
 # States nécessitant un paiement vérifié pour la transition
 PAYMENT_REQUIRED_STATES = {"post_sale", "support"}
 
-# Pattern de détection du tag STATE
-_STATE_TAG_PATTERN = _re.compile(
-    r'\[STATE:(new_prospect|interested_lead|pre_sale|payment_failed|'
-    r'payment_abandoned|payment_success|post_sale|support|escalation)\]'
-)
 
-WEBHOOK_ONLY_STATES    = {"payment_failed", "payment_abandoned", "payment_success"}
-PAYMENT_REQUIRED_STATES = {"post_sale", "support"}
-
-def _extract_state_tag(
-    response_text: str,
-    current_state: str,
-    conversation: dict,
-) -> tuple[str, str | None, bool]:  
-    """
-    Extrait le tag [STATE:xxx] inséré par le LLM.
-    Retourne (clean_response, detected_state, tag_present)
-
-    tag_present = True si le LLM a inséré un tag — même si bloqué
-    """
-    clean_response = _STATE_TAG_PATTERN.sub('', response_text).strip()
-
-    match = _STATE_TAG_PATTERN.search(response_text)
-    if not match:
-        return clean_response, None, False  # ← tag absent
-
-    detected_state = match.group(1)
-
-    # Validation 1 — Bloquer les states réservés aux webhooks
-    if detected_state in WEBHOOK_ONLY_STATES:
-        logger.warning(
-            "LLM a tenté de setter un state webhook-only : %s — ignoré",
-            detected_state,
-        )
-        return clean_response, None, True  # 
-
-    # Validation 2 — Bloquer la transition vers post_sale/support
-    # si le paiement n'est pas vérifié ET qu'on vient d'un état non-payé
-    if detected_state in PAYMENT_REQUIRED_STATES:
-        if current_state not in PAYMENT_REQUIRED_STATES:
-            if not _is_payment_verified(conversation):
-                logger.warning(
-                    "Transition %s → %s bloquée — paiement non vérifié "
-                    "(last_sale_id=%s)",
-                    current_state,
-                    detected_state,
-                    conversation.get("last_sale_id"),
-                )
-                return clean_response, None, True  
-
-    logger.info(
-        "State LLM validé : %s → %s",
-        current_state,
-        detected_state,
-    )
-    return clean_response, detected_state, True  
-
+# WEBHOOK_ONLY_STATES    = {"payment_failed", "payment_abandoned", "payment_success"}
+# PAYMENT_REQUIRED_STATES = {"post_sale", "support"}
 
 def _is_payment_verified(conversation: dict) -> bool:
     """
@@ -298,7 +266,8 @@ class ConversationManager:
         phone: str,
         text: str,
         wa_message_id: str,
-        ) -> None:
+        dry_run: bool = False,
+        ) -> str | None:
         """
         Traite un message WhatsApp entrant.
 
@@ -372,15 +341,18 @@ class ConversationManager:
                 content=closed_msg,
                 metadata={"source": "business_hours"},
             )
-            try:
-                _wa.send_message_direct(
-                    chatId=phone,
-                    message=closed_msg,
-                    conv_id=conv_id,
-                )
-            except Exception as e:
-                logger.exception("Erreur envoi message fermé pour %s : %s", phone, e)
-            return
+
+
+            if not dry_run:
+                try:
+                    _wa.send_message_direct(
+                        chatId=phone,
+                        message=closed_msg,
+                        conv_id=conv_id,
+                    )
+                except Exception as e:
+                    logger.exception("Erreur envoi message fermé pour %s : %s", phone, e)
+            return   
 
         # 6. Sauvegarder le message utilisateur
         save_message(
@@ -465,17 +437,48 @@ class ConversationManager:
             needs_verification,
         )
 
+
+        # SÉPARATION INTENTION VS ACQUISITION
+        current_product = conversation.get("product_id")          # Produit Acquis/Vérifié
+        target_product = conversation.get("target_product_id")    # Intention (Catalogue)
+        
+        # Le RAG et le LLM doivent se baser sur le produit actif (Acquis en priorité, sinon Intention)
+        active_product = current_product if current_product else target_product
+
+        if not active_product:
+
+            from webhook_app.database_conv import get_mini_catalogue_text
+            catalogue_text = get_mini_catalogue_text()
+            context_note += f"\n\n{catalogue_text}"
+            logger.info("Mode Juge activé — Injection du Catalogue dans le contexte.")
+
+        # HACK ÉLÉGANT : On simule temporairement le product_id pour que ton 
+        # ContextBuilder lance le RAG sur l'intention, SANS corrompre la vraie variable stricte.
+        temp_real_product = conversation.get("product_id")
+        conversation["product_id"] = active_product
+
         # 7. Construire le contexte LLM — toujours exécuté
         history = fetch_history(conv_id)
         context = self.context_builder.build(
             conversation=conversation,
             history=history,
-            user_message=text + context_note,  # context_note = "" si pas de vérification
+            user_message=text + context_note,  
         )
+        
+        # On restaure la stricte vérité (Acquis ou None)
+        conversation["product_id"] = temp_real_product
+        # ────────────────────────────────────────────────────────────────────
+
 
         use_cache = len(history) >= 2
     
         # Appel LLM direct — le modèle juge seul si escalade nécessaire
+
+        # # === X-RAY DEBUG : CE QUE LE LLM LIT ===
+        # print(f"\n{'-'*40}\n🔍 [X-RAY INPUT] DYNAMIC CONTEXT (XML & RAG/CATALOGUE)\n{'-'*40}")
+        # print(context.get("system_prompt", "")) 
+        # print(f"{'-'*40}\n")
+
         try:
             response_text, chunk_ids = self.llm_engine.generate(
                 system_prompt=context["system_prompt"],
@@ -485,14 +488,17 @@ class ConversationManager:
             )
         except Exception as e:
             logger.exception("Erreur LLM pour conversation %s : %s", conv_id, e)
-            response_text = (
-                "Désolé, je rencontre une difficulté technique en ce moment. "
-                "Un membre de notre équipe va vous répondre très bientôt. 🙏"
-            )
+            # response_text = (
+            #     "Désolé, je rencontre une difficulté technique en ce moment. "
+            #     "Un membre de notre équipe va vous répondre très bientôt. 🙏"
+            # )
+            response_text = ()
             chunk_ids = []
 
-        # Détecter escalade via tag LLM uniquement
-        escalade_requise = "[ESCALADE_REQUISE]" in response_text
+       
+        # Escalade détectée via support_status: exhausted 
+
+        escalade_requise = False  # mise a jour apres parsing
 
         # ── Détecter tag VERIFY_PAYMENT ───────────────────────────────
     
@@ -556,36 +562,59 @@ class ConversationManager:
                 )
                 logger.info("VERIFY_PAYMENT : aucune transaction pour %s", identifier)
 
+
             # Régénérer la réponse avec le vrai résultat
+            temp_real_product2 = conversation.get("product_id")
+            active_product2 = temp_real_product2 if temp_real_product2 else conversation.get("target_product_id")
+            conversation["product_id"] = active_product2
+
             context2 = self.context_builder.build(
                 conversation=conversation,
                 history=history,
                 user_message=text + context_note,
             )
+            
+            conversation["product_id"] = temp_real_product2
+            # ─────────────────────────────────────────────
+            
             response_text, chunk_ids = self.llm_engine.generate(
                 system_prompt=context2["system_prompt"],
                 messages=context2["messages"],
             )
+
             # Stripper le tag si le LLM le régénère
             response_text = _re.sub(r'\[VERIFY_PAYMENT:[^\]]+\]', '', response_text).strip()
 
+        #Parser XML
 
-        logger.info("=== ESCALADE CHECK ===")
-        logger.info("response_text brut : %s", response_text[:200])
-        logger.info("escalade_requise : %s", escalade_requise)
-        logger.info("======================")
+        output = parse_llm_output(response_text, current_state)
+        output = validate_output(output, current_state, phone=phone, conversation=conversation)
 
-        response_clean = _re.sub(r'\[ESCALADE_REQUISE\]', '', response_text).strip()
+        produit_deduit = getattr(output, "produit_cible", "inconnu").strip()
+        if not conversation.get("product_id") and not conversation.get("target_product_id") and produit_deduit.lower() != "inconnu" and produit_deduit:
+            logger.info("[Découverte] Produit d'intention verrouillé par l'IA : %s", produit_deduit)
 
-        # ── Extraction du tag STATE inséré par le LLM 
+            conversation["target_product_id"] = produit_deduit
+            update_conversation_context(conv_id, target_product_id=produit_deduit)
 
-        response_clean, llm_detected_state, tag_present = _extract_state_tag(
-            response_text=response_clean,
-            current_state=current_state,
-            conversation=conversation,
-        )
+        # === X-RAY DEBUG : CE QUE LE LLM PENSE ===
+        # print(f"\n{'-'*40}\n🧠 [X-RAY OUTPUT] DECISION DU LLM\n{'-'*40}")
+        # print(f"Type: {output.decision_type}")
+        # print(f"Produit_cible: {getattr(output, 'produit_cible', 'inconnu')}") 
+        # print(f"Message: {output.message}")
+        # print(f"{'-'*40}\n")
+        
 
-        response_clean = _convert_markdown_to_whatsapp(response_clean)
+        # Escalade pilotée par support_status: exhausted
+        escalade_requise = output.escalade_signal
+
+        if output.validation_notes:
+            logger.info(
+                "Parser validation — conv=%s notes=%s",
+                conv_id, " | ".join(output.validation_notes),
+            )
+
+        response_clean = _convert_markdown_to_whatsapp(output.message)
 
         # 9. Sauvegarder la réponse assistant
         save_message(
@@ -593,8 +622,15 @@ class ConversationManager:
             role="assistant",
             content=response_clean,
             metadata={
-                "chunks_used": chunk_ids,
-                "escalade": escalade_requise,
+                "chunks_used":      chunk_ids,
+                "escalade":         escalade_requise,
+                "decision_type":    output.decision_type,
+                "strategie":        output.decision_strategie or None, 
+                "contraintes":      output.decision_contraintes or None,
+                "support_status":   output.decision_support_status or None,
+                "state_sortie":     output.state,
+                "parser_valid":     output.is_valid,
+                "parser_notes":     output.validation_notes or None,
             },
         )
 
@@ -622,39 +658,22 @@ class ConversationManager:
             logger.info("-> Pas d'escalade détectée")
 
 
-        #12. ── Transition d'état 
 
-        # Priorité 1 — tag LLM validé
-
-        if tag_present:
-            if llm_detected_state and  llm_detected_state != current_state:
-            
-                update_conversation_state(conv_id, llm_detected_state)
-                logger.info(
-                    "Transition LLM : %s → %s (conversation %s)",
-                    current_state, llm_detected_state, conv_id,
-                )
-            else:
-                logger.info(
-                    "State LLM confirmé : %s (pas de transition)",
-                    current_state,
-                )
-
-        # Priorité 2 — state machine comme fallback si tag absent
-        else:
-            new_state = self.state_machine.transition(
-                current_state=current_state,
-                user_message=text,
-                assistant_response=response_clean,
-                conversation=conversation,
+        # 12. ── Transition d'état
+ 
+        if output.state != current_state:
+            update_conversation_state(conv_id, output.state)
+            logger.info(
+                "Transition : %s → %s (conversation %s)",
+                current_state, output.state, conv_id,
             )
-            if new_state and new_state != current_state:
-                update_conversation_state(conv_id, new_state)
-                logger.info(
-                    "Transition fallback : %s → %s (conversation %s)",
-                    current_state, new_state, conv_id,
-                )
+        else:
+            logger.info(
+                "State maintenu : %s (conversation %s)",
+                current_state, conv_id,
+            )
 
+        return  response_clean
 
 
     # ──────────────────────────────────────────────────────────────────────

@@ -132,7 +132,7 @@ def api_get_conversation(conv_id: str):
     if not conversation:
         return jsonify({"error": "Conversation introuvable"}), 404
 
-    history = fetch_history(conv_id, limit=50)
+    history = fetch_history(conv_id, limit=30)
 
     _serialize_datetimes(conversation)
     for msg in history:

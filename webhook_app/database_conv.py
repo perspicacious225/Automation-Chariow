@@ -240,7 +240,7 @@ def update_conversation_state(conv_id: str, new_state: str) -> bool:
 def update_conversation_context(
     conv_id: str,
     *,
-    product_id: str | None = None,
+    product_id: str | None = None, target_product_id: str | None = None,
     last_sale_id: str | None = None,
     contact_key: str | None = None,
     metadata: dict | None = None,
@@ -249,18 +249,28 @@ def update_conversation_context(
     Met à jour les champs de contexte d'une conversation.
     Seuls les champs non-None sont mis à jour.
     """
+
     fields, values = [], []
     if product_id is not None:
         fields.append("product_id = %s"); values.append(product_id)
+        
+    if target_product_id is not None:
+        fields.append("target_product_id = %s") ; values.append(target_product_id)
+        
     if last_sale_id is not None:
         fields.append("last_sale_id = %s"); values.append(last_sale_id)
+              
     if contact_key is not None:
         fields.append("contact_key = %s"); values.append(contact_key)
+          
     if metadata is not None:
         fields.append("metadata = %s"); values.append(Json(metadata))
+        
     if not fields:
         return False
+        
     values.append(conv_id)
+    
     with get_connection() as conn:
         rc = execute_with_retry(
             conn,
@@ -268,6 +278,58 @@ def update_conversation_context(
             values,
         )
         return (rc or 0) > 0
+    
+
+def get_conversation_summary(conv_id: str) -> dict | None:
+    """
+    Retourne le résumé conversationnel stocké en DB.
+    Retourne None si aucun résumé ou résumé trop ancien.
+    """
+    with get_connection(readonly=True) as conn:
+        row = execute_with_retry(
+            conn,
+            """
+            SELECT conversation_summary, summary_updated_at, summary_msg_count
+            FROM conversations
+            WHERE id = %s
+            """,
+            (conv_id,),
+            fetch="one",
+        )
+        if not row or not row["conversation_summary"]:
+            return None
+        return {
+            "summary":          row["conversation_summary"],
+            "updated_at":       row["summary_updated_at"],
+            "msg_count":        row["summary_msg_count"],
+        }
+
+
+def update_conversation_summary(
+    conv_id: str,
+    summary: str,
+    msg_count: int,
+) -> bool:
+    """
+    Met à jour le résumé conversationnel en DB.
+    """
+    try:
+        with get_connection() as conn:
+            execute_with_retry(
+                conn,
+                """
+                UPDATE conversations
+                SET conversation_summary  = %s,
+                    summary_updated_at    = NOW(),
+                    summary_msg_count     = %s
+                WHERE id = %s
+                """,
+                (summary, msg_count, conv_id),
+            )
+            return True
+    except Exception as e:
+        logger.warning("update_conversation_summary erreur : %s", e)
+        return False
 
 
 def toggle_ai(conv_id: str, active: bool) -> bool:
@@ -311,6 +373,67 @@ def list_conversations(
 # ══════════════════════════════════════════════════════════════════════════════
 # MESSAGES
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+def get_mini_catalogue_text() -> str:
+    """
+    Génère le catalogue dynamique pour le Mode Juge du LLM
+    à partir de la table dim_product.
+    """
+    from webhook_app.database_pg import get_connection, execute_with_retry
+    
+    try:
+        with get_connection(readonly=True) as conn:
+            rows = execute_with_retry(
+                conn,
+                "SELECT product_id, product_name, type FROM dim_product WHERE active = true",
+                fetch="all"
+            )
+            
+            if not rows:
+                return "[CATALOGUE]\n(Aucun produit disponible actuellement)\n[FIN CATALOGUE]"
+
+            lines = ["[CATALOGUE]"]
+            for row in rows:
+                
+                lines.append(f"- {row['product_id']} : {row['product_name']} (Type: {row['type']})")
+            lines.append("[FIN CATALOGUE]")
+            
+            return "\n".join(lines)
+            
+    except Exception as e:
+        
+        return """
+        [CATALOGUE]
+        - prd_k3eyyy : MICROSOFT 365 LICENCE À VIE
+        [FIN CATALOGUE]
+        """
+
+def get_chunks_by_section(product_id: str, section: str) -> list[dict]:
+    """
+    Récupère directement les chunks d'une section spécifique pour un produit donné
+    (sans utiliser la recherche vectorielle).
+    """
+    from webhook_app.database_pg import get_connection, execute_with_retry 
+    
+    with get_connection(readonly=True) as conn:
+        rows = execute_with_retry(
+            conn,
+            """
+            SELECT id, product_id, section, chunk_text, source, chunk_index
+            FROM knowledge_chunks
+            WHERE product_id = %s AND section = %s
+            ORDER BY chunk_index ASC
+            """,
+            (product_id, section),
+            fetch="all"
+        )
+        
+        if not rows:
+            return []
+            
+        # Convertir les lignes de la BDD en dictionnaire
+        return [dict(row) for row in rows]
 
 def save_message(
     conversation_id: str,

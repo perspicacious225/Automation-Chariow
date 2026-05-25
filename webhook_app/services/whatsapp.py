@@ -159,9 +159,7 @@ class WhatsAppService:
                     timeout=10
                 )
                 logger.info(f"Green API status: {response.status_code} | chatId: {final_id}")
-                logger.info(f"Green API body: {response.text}")
                 response.raise_for_status()
-                logger.info(f"Message sent to {final_id}")
                 return True
 
             except requests.exceptions.Timeout:

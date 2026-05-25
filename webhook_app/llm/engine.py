@@ -40,11 +40,10 @@ class LLMEngine:
         messages: list[dict],
         *,
         dynamic_context: str = "",
-        use_cache: bool = True,    
+        use_cache: bool = True,
         max_tokens: Optional[int] = None,
-        temperature: float = 0.7,
+        temperature: float = 0.0,
     ) -> tuple[str, list[str]]:
-
         max_tokens = max_tokens or Config.LLM_MAX_TOKENS
 
         if self.provider == "anthropic":
@@ -87,21 +86,27 @@ class LLMEngine:
         # Éligible au cache si >= 1 024 tokens
         # TTL : 5 minutes côté Anthropic 
 
-        static_block = {
-        "type": "text",
-        "text": system_prompt,
-            }
-        if use_cache:
-            static_block["cache_control"] = {"type": "ephemeral"}
+        system_blocks = []
 
-        system_blocks = [static_block]
-        # Bloc 2 — Dynamique (contexte client + RAG) → jamais mis en cache
-        # Change à chaque appel → inutile de cacher
-        if dynamic_context:
+        # Bloc 1 — Statique (base + state) → mis en cache
+        if system_prompt and system_prompt.strip():
+            static_block = {
+                "type": "text",
+                "text": system_prompt.strip(),
+            }
+            if use_cache:
+                static_block["cache_control"] = {"type": "ephemeral"}
+            system_blocks.append(static_block)
+
+        # Bloc 2 — Dynamique (contexte client + RAG)
+        if dynamic_context and dynamic_context.strip():
             system_blocks.append({
                 "type": "text",
-                "text": dynamic_context,
+                "text": dynamic_context.strip(),
             })
+
+        if not system_blocks:
+            system_blocks = [{"type": "text", "text": "Tu es Yanick, assistant de Digitech Hub."}]
 
         for attempt in range(3):
             try:
@@ -119,24 +124,10 @@ class LLMEngine:
                 cache_read    = getattr(usage, "cache_read_input_tokens", 0) or 0
                 cache_created = getattr(usage, "cache_creation_input_tokens", 0) or 0
 
-                logger.debug(
-                    "Anthropic — input=%d output=%d | cache_read=%d cache_write=%d",
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    cache_read,
-                    cache_created,
+                logger.info(
+                    "LLM — input=%d output=%d | cache_read=%d",
+                    usage.input_tokens, usage.output_tokens, cache_read,
                 )
-
-                if cache_read > 0:
-                    logger.info(
-                        "Cache HIT — %d tokens servis depuis cache",
-                        cache_read,
-                    )
-                elif cache_created > 0:
-                    logger.info(
-                        "Cache WRITE — %d tokens mis en cache",
-                        cache_created,
-                    )
 
                 return text.strip(), []
 

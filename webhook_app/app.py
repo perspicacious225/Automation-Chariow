@@ -30,6 +30,13 @@ from webhook_app.admin.dashboard_v2 import dashboard_v2_bp
 
 
 
+from webhook_app.config import Config
+from webhook_app import config
+
+config.configure_logging(env=Config.APP_ENV)
+
+
+
 def create_app():
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
@@ -288,14 +295,12 @@ def create_app():
         try:
             from webhook_app.database_v21 import init_default_prompts
             from webhook_app.llm.prompts import (
-                STATE_PROMPTS,
                 BASE_SYSTEM_PROMPT,
                 BASE_SYSTEM_PROMPT_EN,
                 BASE_PROMPT_VENDOR_FR,
                 BASE_PROMPT_VENDOR_EN,
                 BASE_PROMPT_SUPPORT_FR,
                 BASE_PROMPT_SUPPORT_EN,
-                DEFAULT_STATE_PROMPT,
             )
 
 
@@ -310,33 +315,6 @@ def create_app():
                 },
             }
 
-            # Ajouter tous les prompts d'état
-            state_labels = {
-                "new_prospect":      "Nouveau prospect",
-                "interested_lead":   "Prospect intéressé",
-                "pre_sale":          "Pre-sale",
-                "payment_failed":    "Paiement échoué",
-                "payment_abandoned": "Paiement abandonné",
-                "payment_success":   "Achat réussi",
-                "post_sale":         "Post-sale",
-                "support":           "Support",
-                "escalation":        "Escalade",
-            }
-
-            # States prompts
-            for key, label in state_labels.items():
-                content = STATE_PROMPTS.get(key, "")
-                if content:
-                    default_prompts[key] = {
-                        "label": label,
-                        "content": content,
-                    }
-
-            # Prompt par défaut
-            default_prompts["default"] = {
-                "label": "Prompt par défaut (état indéterminé)",
-                "content": DEFAULT_STATE_PROMPT,
-            }
 
             # Prompts adaptatifs compressés
             default_prompts["base_vendor"] = {
@@ -385,6 +363,8 @@ def create_app():
 
 # Point d'entrée
 app = create_app()
-
+app.logger.disabled = True
+log = logging.getLogger("werkzeug")
+log.disabled = True
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5001)), use_reloader=True)

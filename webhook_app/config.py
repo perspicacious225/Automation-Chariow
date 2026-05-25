@@ -3,6 +3,8 @@ from pathlib import Path
 from dotenv import load_dotenv # type: ignore
 load_dotenv()
 
+
+
 BASE_DIR = os.path.dirname(__file__)
 
 def _local_db():   return os.path.join(BASE_DIR, "data", "database.sqlite")
@@ -38,6 +40,7 @@ class Config:
     DB_PATH = DB_PATH
     WEBHOOK_DUMP_PATH = WEBHOOK_DUMP_PATH
     SECRET_KEY = os.getenv("SECRET_KEY")
+    APP_ENV = str(os.getenv("APP_ENV", "production"))
     # WhatsApp
     INSTANCE_ID = os.getenv("WHATSAPP_INSTANCE_ID")
     TOKEN       = os.getenv("WHATSAPP_TOKEN")
@@ -139,3 +142,42 @@ PRICE_AFTER   = int(os.getenv("PRICE_AFTER",   "15000"))
 
 # Envoi des deux canaux à chaque étape
 WHATSAPP_AND_EMAIL_ALWAYS = True
+
+
+
+
+
+import logging
+
+def configure_logging(env: str = "development") -> None:
+    """Configure le logging selon l'environnement."""
+
+    # Niveau global
+    root_level = logging.WARNING if env == "production" else logging.DEBUG
+    logging.basicConfig(
+        level=root_level,
+        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Modules métier — toujours INFO en prod et dev
+    for module in [
+        "webhook_app.conversation.manager",
+        "webhook_app.conversation.output_parser",
+        "webhook_app.llm.engine",
+        "webhook_app.database_v21",
+    ]:
+        logging.getLogger(module).setLevel(logging.INFO)
+
+    # Librairies tierces — toujours silencées
+    for lib in [
+        "anthropic",
+        "anthropic._base_client",
+        "urllib3",
+        "urllib3.connectionpool",
+        "httpx",
+        "httpcore",
+        "voyage",
+        "psycopg2",
+    ]:
+        logging.getLogger(lib).setLevel(logging.WARNING)

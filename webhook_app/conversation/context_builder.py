@@ -17,12 +17,12 @@ import logging
 from typing import Optional
 
 from webhook_app.rag.retriever import build_rag_context
+from webhook_app.database_pg import get_connection, execute_with_retry
 from webhook_app.config import Config
 from webhook_app.llm.prompts import (
-    BASE_SYSTEM_PROMPT,
-    BASE_SYSTEM_PROMPT_EN,
+
     get_base_prompt_adaptive,
-    VENDOR_STATES,
+    VENDOR_STATES
 )
 
 logger = logging.getLogger(__name__)
@@ -58,11 +58,6 @@ def _load_prompt(key: str, fallback: str) -> str:
     return fallback
 
 
-def get_base_prompt(language: str = "fr") -> str:
-    """Retourne le prompt de base selon la langue — DB en priorité."""
-    if language == "en":
-        return _load_prompt("base_en", BASE_SYSTEM_PROMPT_EN)
-    return _load_prompt("base", BASE_SYSTEM_PROMPT)
 
 def get_base_prompt(language: str = "fr", state: str = "new_prospect") -> str:
     """
@@ -72,18 +67,26 @@ def get_base_prompt(language: str = "fr", state: str = "new_prospect") -> str:
     return get_base_prompt_adaptive(state, language)
 
 
-
-# ══════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════
 # DÉTECTION LANGUE
-# ══════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════
+
+
 
 def detect_language(text: str) -> str:
     """
     Détecte la langue du message — FR ou EN.
-    Utilise des marqueurs linguistiques simples sans bibliothèque externe.
+    Règles de sécurité :
+      - Message <= 3 mots → défaut FR (trop court pour détecter)
+      - Score positif requis pour basculer EN (score > 0)
+      - Score EN doit être STRICTEMENT supérieur à FR
     Défaut : 'fr'
     """
     text_lower = text.lower().strip()
+
+    # Règle 1 — Message trop court → ne pas détecter
+    if len(text_lower.split()) <= 3:
+        return "fr"
 
     en_markers = [
         "hello", "hi", "hey", "good morning", "good evening",
@@ -104,122 +107,92 @@ def detect_language(text: str) -> str:
     en_score = sum(1 for m in en_markers if m in text_lower)
     fr_score = sum(1 for m in fr_markers if m in text_lower)
 
-    if en_score > fr_score:
+    # Règle 2 — Score positif requis ET strictement supérieur
+    if en_score > 0 and en_score > fr_score:
         return "en"
     return "fr"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════
 # ENRICHISSEMENT CONTEXTE TRANSACTIONNEL
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ════════════════════════════════
 def _build_transaction_context(conversation: dict, phone: str = "") -> str:
     state        = conversation.get("state", "new_prospect")
     product_id   = conversation.get("product_id")
     last_sale_id = conversation.get("last_sale_id")
 
+    # Si prospect totalement vierge, on ne pollue pas le prompt
     if state == "new_prospect" and not last_sale_id and not phone:
         return ""
 
-    lines = ["[CONTEXTE CLIENT]"]
-    lines.append(f"État conversation : {_translate_state(state)}")
+    # On utilise une liste qu'on va joindre SANS sauts de ligne
+    xml = ["<ctx>"]
+    xml.append(f"<etat>{state}</etat>")
 
-    # ── Enrichissement depuis fact_sales par sale_id ──────────────
+    # ── Vente Actuelle 
     sale_data = None
     if last_sale_id:
         sale_data = _fetch_sale_data(last_sale_id)
 
     if sale_data:
-        status = sale_data.get("status", "")
-        lines.append(f"Produit : {sale_data.get('product_name', product_id)}")
-        lines.append(f"Montant : {sale_data.get('amount_value', '')} {sale_data.get('currency', 'XOF')}")
-        lines.append(f"Statut paiement : {_translate_status(status)}")
-        if sale_data.get("completed_at"):
-            lines.append(f"Date achat : {str(sale_data['completed_at'])[:10]}")
+        prod = sale_data.get('product_name') or product_id or '?'
+        mnt = sale_data.get('amount_value') or 'N/A'
+        status = sale_data.get('status', '')
+        
+        xml.append("<vente>")
+        xml.append(f"<prod>{prod}</prod><mnt>{mnt}</mnt><statut>{status}</statut>")
+        if sale_data.get("email"):
+            xml.append(f"<email>{sale_data['email']}</email>")
+        xml.append(f"<tel>{sale_data.get('phone') or phone}</tel>")
+        xml.append("</vente>")
+        
     elif product_id:
-        lines.append(f"Produit concerné : {product_id}")
+        xml.append(f"<prod>{product_id}</prod>")
 
-    # ── Historique transactions par numéro ────────────────────────
+    # ── Historique (Format attributs ultra-compressé) ──
     if phone:
         transactions = _fetch_customer_transactions(phone)
+        xml.append("<txs>")
         if transactions:
-            lines.append("")
-            lines.append("[HISTORIQUE TRANSACTIONS CLIENT]")
-
             priority = {"confirmed": 1, "failed": 2, "abandoned": 3}
             transactions.sort(key=lambda x: (
                 priority.get(x.get("transaction_type", ""), 4),
                 -(x.get("hours_since_created") or 0)
             ))
 
-            has_confirmed = any(t.get("transaction_type") == "confirmed" for t in transactions)
-            has_abandoned = any(t.get("transaction_type") == "abandoned" for t in transactions)
-            has_failed    = any(t.get("transaction_type") == "failed" for t in transactions)
-
             for tx in transactions[:3]:
-                tx_type  = tx.get("transaction_type", "")
-                product  = tx.get("product_name") or tx.get("product_id") or "—"
-                amount   = tx.get("amount_value", "")
-                currency = tx.get("currency", "XOF")
-                hours    = tx.get("hours_since_created", 0)
-
-                hours_display = f"il y a {int(hours)}h" if hours is not None else "récemment"
-                if tx_type == "confirmed": 
-                    lines.append(f"✅ Achat confirmé : {product} — {amount} {currency} ({hours_display})")
-                elif tx_type == "failed":
-                    lines.append(f"❌ Paiement échoué : {product} — {amount} {currency} ({hours_display}) — Aide le client à finaliser")
-                elif tx_type == "abandoned":
-                    lines.append(f"⏸ Panier abandonné : {product} — {amount} {currency} ({hours_display}) — Opportunité de conversion")
-
-            lines.append("")
-            if has_confirmed and has_abandoned:
-                lines.append("→ Ce client a déjà acheté ET a un panier abandonné. S'il parle du produit acheté → support. S'il mentionne un autre produit → propose-le.")
-            elif has_confirmed:
-                lines.append("→ Paiement confirmé. Mode support post-achat pour ce produit. Reste ouvert à vendre d'autres produits si le client en exprime le besoin.")
-            elif has_abandoned:
-                lines.append("→ Panier abandonné. Opportunité de conversion — aide à finaliser.")
-            elif has_failed:
-                lines.append("→ Paiement échoué. Aide le client à identifier le problème et à finaliser.")
-
-            lines.append("[FIN HISTORIQUE]")
-
+                t = tx.get("transaction_type", "")
+                p = tx.get("product_name") or tx.get("product_id") or "?"
+                hours_raw = tx.get("hours_since_created")
+                h = f"{int(hours_raw)}h" if hours_raw is not None else "0h"
+                
+                # Format ultra-court : <tx type="failed" prod="Office" tps="2h"/>
+                xml.append(f'<tx type="{t}" prod="{p}" tps="{h}"/>')
         else:
-            # ── Aucune transaction trouvée par numéro ─────────────
-            lines.append("")
-            lines.append("[AUCUNE TRANSACTION TROUVÉE POUR CE NUMÉRO]")
-            lines.append(
-                "→ Si le client dit avoir payé : demande son email ou numéro "
-                "de téléphone utilisé lors du paiement pour vérification interne."
-            )
+            xml.append("<info>0</info>")
+        xml.append("</txs>")
 
-    # ── Aucun paiement vérifié — instruction au LLM ───────────────
-    # Placé ici — après tout l'historique — pour couvrir le cas
-    # où aucune transaction n'existe ET l'état suggère une vérification
-    if not last_sale_id and state in (
-        "interested_lead", "pre_sale",
-        "payment_failed", "payment_abandoned"
-    ):
-        lines.append("")
-        lines.append("[AUCUN PAIEMENT VÉRIFIÉ POUR L'INSTANT]")
-        lines.append(
-            "→ Si le client dit avoir payé et fournit un email ou téléphone : "
-            "insère [VERIFY_PAYMENT:valeur] IMMÉDIATEMENT. "
-            "Ne confirme JAMAIS un paiement sans [RÉSULTAT VÉRIFICATION] dans le contexte."
-        )
+    # ── Vérification paiement ────────────────────────
+    if not last_sale_id and state in ("interested_lead", "pre_sale", "payment_failed", "payment_abandoned"):
+        xml.append("<verif>non</verif>")
 
-    lines.append("[FIN CONTEXTE CLIENT]")
-    return "\n".join(lines)
+    xml.append("</ctx>")
+    
+    
+    return "".join(xml)
+
 
 def _fetch_sale_data(sale_id: str) -> Optional[dict]:
     """Récupère les données de vente depuis fact_sales par sale_id."""
     try:
-        from webhook_app.database_pg import get_connection, execute_with_retry
+    
         with get_connection(readonly=True) as conn:
             row = execute_with_retry(
                 conn,
                 """
                 SELECT product_id, product_name, amount_value, currency,
-                       status, completed_at, failed_at, abandoned_at
+                       status, completed_at, failed_at, abandoned_at,
+                       email, phone  
                 FROM fact_sales
                 WHERE sale_id = %s LIMIT 1
                 """,
@@ -233,14 +206,13 @@ def _fetch_sale_data(sale_id: str) -> Optional[dict]:
 
 
 def _fetch_customer_transactions(phone: str) -> list[dict]:
-    """Récupère les transactions du client depuis la vue enrichie."""
+    """Récupère les transactions du client depuis la vue enrichie."""
     try:
         from webhook_app.database_v21 import get_customer_transactions
         return get_customer_transactions(phone)
     except Exception as e:
-        logger.warning("Impossible de récupérer transactions pour %s : %s", phone, e)
+        logger.warning("Impossible de récupérer transactions pour %s : %s", phone, e)
         return []
-
 
 def _translate_status(status: str) -> str:
     mapping = {
@@ -267,9 +239,135 @@ def _translate_state(state: str) -> str:
     return mapping.get(state, state)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+
+def _extract_prefilled_fields(conversation: dict, phone: str = "") -> dict:
+    """
+    Extrait les champs clés depuis la DB pour les formater en XML.
+    """
+    fields = {
+        "email_connu":      "ABSENT",
+        "paiement_verifie": "non",
+        "current_state":    conversation.get("state", "new_prospect"),
+    }
+
+    last_sale_id = conversation.get("last_sale_id")
+    
+    # 1. Tenter d'utiliser last_sale_id
+    if last_sale_id:
+        try:
+            sale_data = _fetch_sale_data(last_sale_id)
+            if sale_data:
+                if sale_data.get("email"):
+                    fields["email_connu"] = sale_data["email"]
+                if sale_data.get("status") == "completed":
+                    fields["paiement_verifie"] = "oui"
+        except Exception as e:
+            logger.warning("_extract_prefilled_fields (sale_id) erreur : %s", e)
+            
+    # 2. Si pas d'email via fact_sales, vérifier si le webhook l'a extrait
+    if fields["email_connu"] == "ABSENT" and conversation.get("contact_key"):
+         fields["email_connu"] = conversation["contact_key"]
+
+    return fields
+
+
+def _detect_cdd_phase(history: list[dict]) -> str | None:
+    """
+    Détecte la phase CDD en cours depuis l'historique.
+    Si le dernier message assistant répondait à une objection
+    → le client répond maintenant → phase discuter_demonter autorisée.
+    """
+    if len(history) < 2:
+        return None
+
+    for msg in reversed(history):
+        if msg.get("role") != "assistant":
+            continue
+
+        metadata = msg.get("metadata") or {}
+        last_type = metadata.get("decision_type", "")
+
+        if last_type.startswith("objection_"):
+            return "discuter_demonter"
+
+        # Dernier message assistant trouvé mais pas une réponse à objection
+        return None
+
+    return None
+
+def _generate_summary(messages: list[dict], language: str = "fr") -> str | None:
+    """
+    Génère un résumé condensé de l'historique ancien via Haiku.
+    Appelé uniquement quand le résumé est absent ou obsolète.
+    """
+    if not messages:
+        return None
+
+    # Formater l'historique pour le résumé
+    history_text = "\n".join([
+        f"{msg['role'].upper()} : {(msg.get('content') or '')[:300]}"
+        for msg in messages
+        if msg.get("role") in ("user", "assistant") and msg.get("content")
+    ])
+
+    if not history_text.strip():
+        return None
+
+    if language == "en":
+        prompt = (
+            "You are summarizing a WhatsApp sales/support conversation "
+            "for Digitech Hub. Generate a factual summary in 4-6 sentences.\n\n"
+            "MANDATORY — include if mentioned:\n"
+            "- Client name\n"
+            "- Product discussed and price quoted\n"
+            "- Payment status (paid / not paid / verification pending)\n"
+            "- Email and phone used for payment\n"
+            "- Technical problems encountered\n"
+            "- Current conversation state "
+            "(prospect / interested / pre-sale / support)\n"
+            "- Any objections raised and how they were handled\n\n"
+            "Be factual. Never invent information not in the conversation.\n\n"
+            f"CONVERSATION:\n{history_text}"
+        )
+    else:
+        prompt = (
+            "Tu résumes une conversation WhatsApp de vente/support "
+            "pour Digitech Hub. Génère un résumé factuel en 4 à 5 phrases.\n\n"
+            "OBLIGATOIRE — inclure si mentionné :\n"
+            "- Prénom/nom du client\n"
+            "- Produit discuté et prix cité\n"
+            "- Statut paiement (payé / non payé / vérification en attente)\n"
+            "- Email et téléphone utilisés pour le paiement\n"
+            "- Problèmes techniques rencontrés\n"
+            "- État actuel de la conversation "
+            "(prospect / intéressé / pré-achat / support)\n"
+            "- Objections soulevées et comment elles ont été traitées\n\n"
+            "Sois factuel. Ne jamais inventer d'information absente "
+            "de la conversation.\n\n"
+            f"CONVERSATION:\n{history_text}"
+        )
+
+    try:
+        import anthropic
+        from webhook_app.config import Config
+
+        client = anthropic.Anthropic(api_key=Config.LLM_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",  
+            max_tokens=300,
+            temperature=0.3,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        summary = response.content[0].text.strip() if response.content else None
+        logger.debug("Résumé généré : %d chars", len(summary) if summary else 0)
+        return summary
+
+    except Exception as e:
+        logger.warning("_generate_summary erreur : %s", e)
+        return None
+# ════════════════════════════════
 # CONTEXT BUILDER
-# ══════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════
 
 class ContextBuilder:
 
@@ -287,110 +385,243 @@ class ContextBuilder:
         # ── Détection langue sur premier message ──────────────────
         # Si langue pas encore définie ou par défaut fr,
         # on tente de détecter sur chaque message
-        if not language or language == "fr":
+
+        LANGUAGE_LOCK_THRESHOLD = 3
+
+        _history_count = len(history)
+        _lang_locked   = _history_count >= LANGUAGE_LOCK_THRESHOLD
+
+        if not _lang_locked:
+            # Moins de 3 messages — détection encore possible
             detected = detect_language(user_message)
-            if detected != language:
+            if detected != language and detected == "en":
+                
                 language = detected
-                # Mise à jour en DB en arrière-plan
                 try:
                     from webhook_app.database_v21 import set_conversation_language
-                    conv_id = str(conversation.get("id", ""))
-                    if conv_id:
-                        set_conversation_language(conv_id, language)
-                        logger.info("Langue détectée : %s → conv %s", language, conv_id)
+                    conv_id_str = str(conversation.get("id", ""))
+                    if conv_id_str:
+                        set_conversation_language(conv_id_str, language)
+                        logger.info(
+                            "Langue mise à jour : %s → conv %s (msg %d/%d avant lock)",
+                            language, conv_id_str, _history_count, LANGUAGE_LOCK_THRESHOLD,
+                        )
                 except Exception as e:
                     logger.warning("Mise à jour langue échouée : %s", e)
+        else:
+            # Langue verrouillée — ignorer toute détection
+            logger.debug(
+                "Langue verrouillée après %d messages : %s",
+                _history_count, language,
+            )
 
-        # ── Query RAG enrichie ────────────────────────────────────
-        rag_query = user_message
+
+        # ── Query RAG enrichie 
+
+        rag_query = user_message  
+        
         if len(user_message.strip().split()) <= 6:
             prev_user_msgs = [
                 m["content"] for m in history
                 if m.get("role") == "user"
                 and m.get("content") != user_message
             ]
+            
             if prev_user_msgs:
-                rag_query = f"{prev_user_msgs[-1]} {user_message}"
+                #  Historique récent
+                combined = f"{prev_user_msgs[-1]} {user_message}"
+                words = combined.split()
+                rag_query = " ".join(words[:10]) if len(words) > 10 else combined
+            
+            elif product_id:
+                #  Injection produit cold start
+                rag_query = f"{user_message} {product_id} lien paiement prix"
 
-        # ── 1. Contexte RAG ───────────────────────────────────────
-
+        # ── 1. Contexte RAG
+        
         _rag_cfg = RAG_CONFIG.get(state, DEFAULT_RAG_CONFIG)
         rag_context, chunk_ids = build_rag_context(
             query=rag_query,
             product_id=product_id,
             top_k=_rag_cfg["top_k"],
             min_score=_rag_cfg["min_score"],
+            state=state
         )
 
-        # ── 2. Contexte transactionnel enrichi ────────────────────
+        # ── 2. Contexte transactionnel enrichi 
         transaction_context = _build_transaction_context(conversation, phone)
 
-        # ── 3. Détection frustration ──────────────────────────────
+        # ── 3. Détection frustration 
         frustration_keywords = self._load_frustration_keywords()
         frustration_detected = any(kw in user_message.lower() for kw in frustration_keywords)
 
-        # ── 4. A/B testing — variant prompt ──────────────────────
+        # ── 4. A/B testing — variant prompt \
         ab_prompt = self._get_ab_prompt(conversation)
 
-        # ── 5. Prompt de base selon langue ───────────────────────
+        # ── 5. Prompt de base selon langue et ROUTAGE BINAIRE 
 
-        from webhook_app.llm.prompts import get_state_prompt
         base_prompt = ab_prompt if ab_prompt else get_base_prompt(language, state=state)
-        state_prompt = get_state_prompt(state)
-        static_prompt = base_prompt + "\n" + state_prompt
+        static_prompt = base_prompt
 
-        # Partie dynamique → jamais mise en cache
+        # Partie dynamique 
         dynamic_parts = []
 
+        #VÉRITÉ XML UNIFIÉE 
+    
         if transaction_context:
             dynamic_parts.append(transaction_context)
 
-        if frustration_detected:
-            if language == "en":
-                dynamic_parts.append(
-                    "[CLIENT SIGNAL] Customer expressing strong frustration. "
-                    "Be especially empathetic. Focus on reassuring and solving."
-                )
-            else:
-                dynamic_parts.append(
-                    "[SIGNAL CLIENT] Le client exprime une frustration forte. "
-                    "Adopte un ton empathique. Concentre-toi sur le rassurer et résoudre."
-                )
+        #PHASE CDD Traitement des objections
+        # Injectée si le client répond à une clarification 
+        cdd_phase = _detect_cdd_phase(history)
+        if cdd_phase == "discuter_demonter":
+            dynamic_parts.append(
+                "\n[CDD_PHASE: discuter_demonter]\n"
+                "Le client répond à ta question de clarification précédente.\n"
+                "Tu peux maintenant utiliser les arguments, chiffres et preuves KB.\n"
+            )
 
-        if rag_context:
-            dynamic_parts.append(rag_context)
-        else:
-            if language == "en":
-                dynamic_parts.append(
-                    "[NOTE] No specific product information found. Respond generally."
-                )
+        # ── 3. RAG ET BASE DE CONNAISSANCES 
+        if frustration_detected:
+            if rag_context:
+                # Injection de la RAG avec format attendu par la Source 1
+                dynamic_parts.append(f"\n{rag_context}\n")
+
             else:
-                dynamic_parts.append(
-                    "[NOTE] Aucune information produit trouvée. Réponds de façon générale."
-                )
+                if language == "en":
+                    dynamic_parts.append("\n[NOTE] No specific product information found.\n")
+                else:
+                    dynamic_parts.append("\n[NOTE] Aucune information produit trouvée.\n")
+        else:
+            # Toujours injecter la RAG si elle existe 
+            if rag_context:
+                dynamic_parts.append(f"\n{rag_context}\n")
+
 
         dynamic_prompt = "\n".join(dynamic_parts)
 
-        # ── 6. Construction des messages pour le LLM ──────────────
-        # Historique au format Anthropic [{role, content}]
+        # ── 6. Construction des messages pour le LLM 
+
+        # Seuil : si plus de 10 messages → résumé glissant
+        HISTORY_THRESHOLD = 10
+        HISTORY_RECENT_COUNT = 6
+        SUMMARY_UPDATE_THRESHOLD = 5
+
         llm_messages = []
-        for msg in history:
-            role    = msg.get("role", "")
-            content = (msg.get("content") or "").strip()
-            if role in ("user", "assistant") and content:
-                llm_messages.append({"role": role, "content": content})
 
-        # Ajouter le message utilisateur courant en dernier
-        if user_message.strip():
-            llm_messages.append({"role": "user", "content": user_message.strip()})
+        if len(history) > HISTORY_THRESHOLD:
+            # Partie ancienne → résumé
+            old_msgs    = history[:-HISTORY_RECENT_COUNT]
+            recent_msgs = history[-HISTORY_RECENT_COUNT:]
 
-        logger.debug(
-            "Contexte LLM — lang=%s | %d msgs | RAG: %d chunks | frustration: %s",
-            language,
-            len(llm_messages),
-            len(chunk_ids),
-            frustration_detected,
-        )
+            # Charger le résumé existant depuis DB
+            from webhook_app.database_conv import (
+                get_conversation_summary,
+                update_conversation_summary,
+            )
+            conv_id      = str(conversation.get("id", ""))
+            summary_data = get_conversation_summary(conv_id)
+
+            # Résumé à jour si existe ET écart < SUMMARY_UPDATE_THRESHOLD
+            if summary_data and (len(old_msgs) - summary_data["msg_count"]) < SUMMARY_UPDATE_THRESHOLD:
+                summary_text = summary_data["summary"]
+                logger.debug(
+                    "Résumé glissant : cache utilisé (%d msgs résumés, %d actuels)",
+                    summary_data["msg_count"],
+                    len(old_msgs),
+                )
+            else:
+                # Résumé absent ou trop ancien 
+                summary_text = _generate_summary(old_msgs, language)
+                if summary_text and conv_id:
+                    update_conversation_summary(conv_id, summary_text, len(old_msgs))
+                    logger.info(
+                        "Résumé glissant généré et sauvegardé (%d msgs résumés)",
+                        len(old_msgs),
+                    )
+                else:
+                    logger.warning(
+                        "Résumé glissant : génération échouée — "
+                        "fallback historique complet"
+                    )
+                    # Fallback :  tout l'historique si résumé échoue
+                    summary_text = None
+                    for msg in history:
+                        role    = msg.get("role", "")
+                        content = (msg.get("content") or "").strip()
+                        if role in ("user", "assistant") and content:
+                            llm_messages.append({"role": role, "content": content})
+
+            # Injecter le résumé + messages récents si résumé disponible
+            if summary_text:
+                llm_messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[RÉSUMÉ CONVERSATION PRÉCÉDENTE]\n"
+                        f"{summary_text}\n"
+                        f"[FIN RÉSUMÉ]"
+                    ),
+                })
+                llm_messages.append({
+                    "role": "assistant",
+                    "content": "Compris, je prends en compte le contexte de notre échange précédent.",
+                })
+
+                # Ajouter les messages récents complets
+                for msg in recent_msgs:
+                    role    = msg.get("role", "")
+                    content = (msg.get("content") or "").strip()
+                    if role in ("user", "assistant") and content:
+                        llm_messages.append({"role": role, "content": content})
+
+        else:
+            # Historique court, envoyer tout
+            for msg in history:
+                role    = msg.get("role", "")
+                content = (msg.get("content") or "").strip()
+                if role in ("user", "assistant") and content:
+                    llm_messages.append({"role": role, "content": content})
+
+        # Ajouter le message utilisateur courant si pas déjà présent
+        last_msg = llm_messages[-1] if llm_messages else None
+        current_content = user_message.strip()
+        if not last_msg or last_msg["role"] != "user" or last_msg["content"] != current_content:
+            if current_content:
+                llm_messages.append({"role": "user", "content": current_content})
+
+        # # ── Debug résumé et tokens ─────────
+        # if len(history) > HISTORY_THRESHOLD:
+        #     logger.debug(
+        #         "Résumé debug — history=%d old=%d recent=%d llm_msgs=%d",
+        #         len(history),
+        #         len(old_msgs),
+        #         len(recent_msgs),
+        #         len(llm_messages),
+        #     )
+
+        # logger.debug(
+        #     "Static prompt debug — base=%d state=%d total=%d",
+        #     len(base_prompt),
+        #     len(static_prompt),
+        #     len(base_prompt) + len(static_prompt)
+        # )
+
+        # logger.debug(
+        #     "Tokens breakdown — static≈%d dynamic≈%d history≈%d rag≈%d",
+        #     len(static_prompt) // 4,
+        #     len(dynamic_prompt) // 4,
+        #     sum(len(m.get("content", "")) for m in llm_messages) // 4,
+        #     len(rag_context) // 4 if rag_context else 0,
+        # )
+
+        # # ── Log existant ────────────────────
+        # logger.debug(
+        #     "Contexte LLM — lang=%s | %d msgs | RAG: %d chunks | frustration: %s",
+        #     language,
+        #     len(llm_messages),
+        #     len(chunk_ids),
+        #     frustration_detected,
+        # )
 
         return {
             "system_prompt":   static_prompt,
@@ -408,7 +639,7 @@ class ContextBuilder:
             "ne marche pas", "fraudé", "mensonge",
         ]
         try:
-            from webhook_app.database_pg import get_connection, execute_with_retry
+            
             with get_connection(readonly=True) as conn:
                 rows = execute_with_retry(
                     conn,

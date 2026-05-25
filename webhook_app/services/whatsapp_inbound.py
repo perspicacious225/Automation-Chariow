@@ -104,7 +104,7 @@ def _verify_signature(request_obj) -> bool:
 ADMIN_TAGS = {
     "#REPRISE": {"ai_active": True,  "state": None},
     "#PAUSE":   {"ai_active": False, "state": None},
-    "#RESOLU":  {"ai_active": True,  "state": "post_sale"},
+    "#RESOLU":  {"ai_active": True,  "state": None},
 }
 
 
@@ -273,7 +273,7 @@ def whatsapp_inbound():
                     message["text"], message["phone"])
         try:
             _handle_admin_command(
-                phone=message["phone"],       # numéro du client
+                phone=message["phone"],       
                 text=message["text"],
                 wa_message_id=message["wa_message_id"],
                 chat_id=message["phone"],

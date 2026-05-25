@@ -479,6 +479,7 @@ function renderContext(conv, sale) {
     ['État',      conv.state || '—'],
     ['IA active', conv.ai_active ? 'Oui' : 'Non'],
     ['Produit',   conv.product_id || '—'],
+    // ['INTENTION d\'achat', conv.target_product_id]
     ['Vente ID',  conv.last_sale_id || '—'],
     ['LID',       conv.lid || '—'],
     ['Créé le',   conv.created_at ? new Date(conv.created_at).toLocaleString('fr-FR') : '—'],
