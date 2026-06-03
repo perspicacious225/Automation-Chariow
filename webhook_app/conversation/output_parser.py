@@ -139,6 +139,11 @@ class LLMOutput:
 def parse_llm_output(response_text: str, current_state: str) -> LLMOutput:
     """Parse la réponse XML du LLM."""
 
+    response_text = re.sub(
+        r'<thinking>.*?</thinking>', '',
+        response_text,
+        flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
     output = LLMOutput(raw=response_text, message="", state=current_state)
     output.state = current_state
 
@@ -183,11 +188,26 @@ def parse_llm_output(response_text: str, current_state: str) -> LLMOutput:
         return output
 
     # ── Tentative 3 — Aucun format reconnu 
-    output.message = response_text.strip()
-    output.state   = current_state
-    output.validation_notes.append("aucun format reconnu → message brut + state actuel")
-    logger.warning("parse_llm_output FALLBACK — aucun format détecté")
-    return output
+    is_truncated = (
+    "</response>" not in response_text
+    and "<message>" not in response_text
+    and len(response_text.strip()) > 30
+)
+    if is_truncated:
+        output.message = ""
+        output.validation_notes.append("réponse tronquée détectée — message vide retourné")
+        logger.warning("parse_llm_output — réponse tronquée (max_tokens ?)")
+    else:
+        output.message = ""
+        output.state   = current_state
+        output.validation_notes.append(
+            "Tentative 3 — format non reconnu → message vide par sécurité"
+        )
+        logger.warning(
+            "parse_llm_output FALLBACK — format non reconnu (%d chars) — "
+            "message vide retourné par sécurité", len(response_text.strip())
+        )
+        return output
 
 
 def _parse_decision_fields(output: LLMOutput) -> None:

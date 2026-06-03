@@ -61,6 +61,24 @@ def _convert_markdown_to_whatsapp(text: str) -> str:
     —               →  :         (tiret long → deux-points)
     """
 
+    # Blocs complets <tag>...</tag>
+    text = _re.sub(r'<[a-zA-Z][^>]*>.*?</[a-zA-Z][^>]*>', '', text, flags=_re.DOTALL)
+
+    text = _re.sub(r'</?[a-zA-Z][^>]{0,50}>', '', text)
+    # Marqueurs internes LLM
+    text = _re.sub(r'\[CDD_PHASE:[^\]]*\]', '', text)
+    text = _re.sub(r'\[RÉSULTAT VÉRIFICATION[^\]]*\]', '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'\[MÉDIA REÇU[^\]]*\]', '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'\[DOCUMENT REÇU[^\]]*\]', '', text, flags=_re.IGNORECASE)
+    #Balise XML résiduelle collée à une lettre → contenu suspect → vider
+    if _re.search(r'</?[a-zA-Z]', text):
+        logger.error(
+            "SÉCURITÉ — balise XML résiduelle après nettoyage — message vidé : %s",
+            text[:100],
+        )
+        text = ""
+
+
     # Nettoyer les ** ou __ autour des URLs 
     text = _re.sub(r'\*{1,2}(https?://[^\s*]+)\*{1,2}', r'\1', text)
     text = _re.sub(r'_{1,2}(https?://[^\s_]+)_{1,2}', r'\1', text)
@@ -94,6 +112,8 @@ def _convert_markdown_to_whatsapp(text: str) -> str:
 
     text = _re.sub(r' {2,}', ' ', text)   
     text = _re.sub(r'\n{3,}', '\n\n', text)
+
+    text = _re.sub(r'^.*?</thinking>', '', text, flags=_re.DOTALL | _re.IGNORECASE).strip()
     text = text.strip()
 
     return text
@@ -267,7 +287,9 @@ class ConversationManager:
         text: str,
         wa_message_id: str,
         dry_run: bool = False,
+        media: dict | None = None, 
         ) -> str | None:
+
         """
         Traite un message WhatsApp entrant.
 
@@ -453,22 +475,68 @@ class ConversationManager:
             logger.info("Mode Juge activé — Injection du Catalogue dans le contexte.")
 
         # HACK ÉLÉGANT : On simule temporairement le product_id pour que ton 
-        # ContextBuilder lance le RAG sur l'intention, SANS corrompre la vraie variable stricte.
         temp_real_product = conversation.get("product_id")
         conversation["product_id"] = active_product
 
+        # ── Traitement média (image / document)
+        processed_media = None
+        if media:
+            try:
+                from webhook_app.services.media_processor import (
+                    process_media,
+                    build_media_context_note,
+                )
+                processed_media = process_media(media)
+                logger.info(
+                    "Média traité — status=%s | fichier=%s",
+                    processed_media.get("status"), processed_media.get("filename"),
+                )
+                # Pour les cas non-vision → injecter dans context_note (texte)
+                if processed_media.get("status") != "image_ok":
+                    context_note += build_media_context_note(processed_media)
+                    processed_media = None   # pas d'injection multimodale nécessaire
+            except Exception as e:
+                logger.warning("Traitement média échoué (non bloquant) : %s", e)
+                processed_media = None
+
         # 7. Construire le contexte LLM — toujours exécuté
+
+        user_message_for_llm = (text + context_note).strip()
+        if not user_message_for_llm and media:
+            user_message_for_llm = "[Image reçue]"
+
         history = fetch_history(conv_id)
         context = self.context_builder.build(
             conversation=conversation,
             history=history,
-            user_message=text + context_note,  
+            user_message=user_message_for_llm,
         )
+
+        if processed_media and processed_media.get("status") == "image_ok":
+            messages = context["messages"]
+            if messages and messages[-1]["role"] == "user":
+                last_text = messages[-1]["content"]
+                # Construire le contenu multimodal Anthropic
+                messages[-1]["content"] = [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type":       "base64",
+                            "media_type": processed_media["mime_type"],
+                            "data":       processed_media["data"],
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            last_text if last_text and last_text.strip() not in ("", "[Image reçue]") else "Le client a envoyé cette image sans légende."),
+                    },
+                ]
+                logger.info("Image injectée en multimodal dans le dernier message user")
         
         # On restaure la stricte vérité (Acquis ou None)
         conversation["product_id"] = temp_real_product
         # ────────────────────────────────────────────────────────────────────
-
 
         use_cache = len(history) >= 2
     
@@ -634,11 +702,19 @@ class ConversationManager:
             },
         )
 
+        reading_delay, typing_delay = WhatsAppService.calculate_delays(
+            incoming=text,
+            outgoing=response_clean,
+        )
+
+
         try:
             _wa.send_message_direct(
                 chatId=phone,
                 message=response_clean,
                 conv_id=conv_id,
+                reading_delay=reading_delay,
+                typing_delay=typing_delay,
             )
         except Exception as e:
             logger.exception("Erreur envoi WhatsApp pour %s : %s", phone, e)
