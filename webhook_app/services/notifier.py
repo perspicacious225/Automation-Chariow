@@ -266,7 +266,7 @@ class Notifier:
                             from webhook_app.database_conv import (
                                 get_or_create_conversation, save_message
                             )
-                            phone_normalized = "+" + phone_key + "@c.us"
+                            phone_normalized = self.whatsapp_service.normalize_phone(phone_raw)
                             conv = get_or_create_conversation(
                                 phone=phone_normalized,
                                 product_id=sale.product_id,

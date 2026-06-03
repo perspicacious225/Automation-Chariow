@@ -163,12 +163,8 @@ def get_or_create_conversation(
     last_sale_id: str | None = None,
     initial_state: str = "new_prospect",
 ) -> dict:
-    """
-    Récupère la conversation existante pour ce numéro de téléphone,
-    ou en crée une nouvelle.
-    Retourne le dict de la conversation.
-    """
     with get_connection() as conn:
+
         row = execute_with_retry(
             conn,
             "SELECT * FROM conversations WHERE phone = %s LIMIT 1",
@@ -177,6 +173,24 @@ def get_or_create_conversation(
         )
         if row:
             return dict(row)
+
+        import re as _re
+        digits_suffix = _re.sub(r'\D', '', phone)[-8:]
+        if digits_suffix:
+            row = execute_with_retry(
+                conn,
+                "SELECT * FROM conversations WHERE phone LIKE %s LIMIT 1",
+                (f"%{digits_suffix}%",),
+                fetch="one",
+            )
+            if row:
+                logger.debug(
+                    "get_or_create_conversation — doublon format évité "
+                    "via suffix %s → conv %s",
+                    digits_suffix, row["id"],
+                )
+                return dict(row)
+
 
         execute_with_retry(
             conn,

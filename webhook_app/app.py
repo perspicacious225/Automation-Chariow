@@ -28,9 +28,6 @@ from webhook_app.services.whatsapp import WhatsAppService
 
 from webhook_app.admin.dashboard_v2 import dashboard_v2_bp
 
-
-
-from webhook_app.config import Config
 from webhook_app import config
 
 config.configure_logging(env=Config.APP_ENV)
@@ -213,14 +210,14 @@ def create_app():
                     app.logger.error(f"Erreur partage Drive: {e}", exc_info=True)
                 notifier.handle_success(sale)
 
-            # synchronisation contexte conversationnel ────────
+            # ksynchronisation contexte conversationnel ────────
             try:
                 _phone_raw = sale.customer_phone or ""
                 if _phone_raw:
-                    _phone_norm = WhatsAppService.normalize_for_dedupe(_phone_raw)
+                    _phone_norm = WhatsAppService.normalize_phone(_phone_raw)
                     if _phone_norm:
                         ConversationManager().on_payment_event(
-                            phone="+" + _phone_norm,
+                            phone=_phone_norm,
                             event_type=payload.get("event", ""),
                             sale_id=sale.id,
                             product_id=sale.product_id,
