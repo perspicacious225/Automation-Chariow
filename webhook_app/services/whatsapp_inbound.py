@@ -30,11 +30,12 @@ inbound_bp = Blueprint("whatsapp_inbound", __name__)
 def _extract_message(payload: dict) -> dict | None:
     webhook_type = payload.get("typeWebhook")
 
-    # Accepter les messages entrants ET sortants depuis le téléphone instance
+
     if webhook_type not in ("incomingMessageReceived", "outgoingMessageReceived"):
         logger.debug("Webhook ignoré — type : %s", webhook_type)
         return None
-    sender_data = payload.get("senderData") or {}
+
+    sender_data  = payload.get("senderData") or {}
     message_data = payload.get("messageData") or {}
     text_message = message_data.get("textMessageData") or {}
 
@@ -47,24 +48,38 @@ def _extract_message(payload: dict) -> dict | None:
     if "@g.us" in chat_id:
         return None
 
-    phone_raw = chat_id.replace("@c.us", "").strip()
+    phone_raw  = chat_id.replace("@c.us", "").strip()
     id_message = payload.get("idMessage") or ""
-    text = text_message.get("textMessage") or ""
+
+    # ── Extraction du texte
+    extended = message_data.get("extendedTextMessageData") or {}
+    text     = text_message.get("textMessage") or extended.get("text") or ""
+
+    # ── Contexte du message 
+    quoted      = extended.get("quotedMessage") or {}
+    quoted_text = (
+        quoted.get("textMessage")
+        or (quoted.get("extendedTextMessageData") or {}).get("text")
+        or ""
+    )
+    if quoted_text.strip():
+        text = f'[En réponse à : "{quoted_text.strip()[:100]}"]\n{text}'
+
 
     if not text.strip():
         return None
 
-    # Pour outgoing : is_outgoing=True — utilisé pour détecter les commandes admin
+    # Pour outgoing : is_outgoing=True —
     is_outgoing = webhook_type == "outgoingMessageReceived"
 
     return {
-        "phone_raw": phone_raw,
-        "phone":     chat_id,      # chatId = numéro du client
-        "sender":    sender,       # sender = qui a envoyé
+        "phone_raw":     phone_raw,
+        "phone":         chat_id,       
+        "sender":        sender,        
         "wa_message_id": id_message,
-        "text":      text.strip(),
-        "timestamp": payload.get("timestamp"),
-        "is_outgoing": is_outgoing,
+        "text":          text.strip(),
+        "timestamp":     payload.get("timestamp"),
+        "is_outgoing":   is_outgoing,
     }
 
 
