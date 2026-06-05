@@ -218,31 +218,48 @@ def _sanitize_messages_anthropic(messages: list[dict]) -> list[dict]:
     - Premier message role="user"
     - Alternance stricte user → assistant → user → ...
     - Pas de messages consécutifs du même rôle
-
-    Cette fonction nettoie l'historique pour respecter ces contraintes.
+ 
+    Gère les contenus texte (str) ET multimodaux (list) pour Claude vision.
     """
     if not messages:
         return []
-
+ 
     clean = []
     for msg in messages:
-        role = msg.get("role")
-        content = (msg.get("content") or "").strip()
-        if role not in ("user", "assistant") or not content:
+        role    = msg.get("role")
+        content = msg.get("content")
+ 
+        if role not in ("user", "assistant"):
             continue
-        # Fusionner les messages consécutifs du même rôle
-        if clean and clean[-1]["role"] == role:
-            clean[-1]["content"] += "\n" + content
+ 
+        # ── Contenu multimodal (list) — image + texte ──────────────────────
+        # Ne jamais fusionner les messages multimodaux
+        if isinstance(content, list):
+            if content:   # ignorer les listes vides
+                clean.append({"role": role, "content": content})
+            continue
+ 
+        # ── Contenu texte (str) ────────────────────────────────────────────
+        content_str = (content or "").strip()
+        if not content_str:
+            continue
+ 
+        # Fusionner les messages TEXTE consécutifs du même rôle uniquement
+        if (
+            clean
+            and clean[-1]["role"] == role
+            and isinstance(clean[-1]["content"], str)
+        ):
+            clean[-1]["content"] += "\n" + content_str
         else:
-            clean.append({"role": role, "content": content})
-
+            clean.append({"role": role, "content": content_str})
+ 
     # S'assurer que le premier message est role="user"
     if clean and clean[0]["role"] != "user":
         clean.pop(0)
-
+ 
     # S'assurer que le dernier message est role="user"
-    # (sinon Anthropic retourne une erreur)
     if clean and clean[-1]["role"] != "user":
         clean = clean[:-1]
-
+ 
     return clean

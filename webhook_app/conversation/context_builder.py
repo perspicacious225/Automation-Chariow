@@ -59,58 +59,12 @@ def _load_prompt(key: str, fallback: str) -> str:
 
 
 
-def get_base_prompt(language: str = "fr", state: str = "new_prospect") -> str:
+def get_base_prompt(state: str = "new_prospect") -> str:
     """
     Retourne le prompt adaptatif selon le mode et la langue.
     Fallback vers le prompt base complet si clé DB absente.
     """
-    return get_base_prompt_adaptive(state, language)
-
-
-# ════════════════════════════════
-# DÉTECTION LANGUE
-# ════════════════════════════════
-
-
-
-def detect_language(text: str) -> str:
-    """
-    Détecte la langue du message — FR ou EN.
-    Règles de sécurité :
-      - Message <= 3 mots → défaut FR (trop court pour détecter)
-      - Score positif requis pour basculer EN (score > 0)
-      - Score EN doit être STRICTEMENT supérieur à FR
-    Défaut : 'fr'
-    """
-    text_lower = text.lower().strip()
-
-    # Règle 1 — Message trop court → ne pas détecter
-    if len(text_lower.split()) <= 3:
-        return "fr"
-
-    en_markers = [
-        "hello", "hi", "hey", "good morning", "good evening",
-        "i need", "i want", "i would like", "please", "thank you",
-        "how much", "what is", "can you", "do you", "i have",
-        "i paid", "i bought", "it doesn't work", "not working",
-        "help me", "my order", "my account", "send me",
-    ]
-
-    fr_markers = [
-        "bonjour", "bonsoir", "salut", "allô", "allo",
-        "je veux", "je voudrais", "j'ai besoin", "s'il vous plaît",
-        "merci", "combien", "qu'est-ce", "pouvez-vous", "est-ce que",
-        "j'ai payé", "j'ai acheté", "ça ne fonctionne", "aide-moi",
-        "ma commande", "mon compte", "envoyez-moi", "c'est",
-    ]
-
-    en_score = sum(1 for m in en_markers if m in text_lower)
-    fr_score = sum(1 for m in fr_markers if m in text_lower)
-
-    # Règle 2 — Score positif requis ET strictement supérieur
-    if en_score > 0 and en_score > fr_score:
-        return "en"
-    return "fr"
+    return get_base_prompt_adaptive(state)
 
 
 # ════════════════════════════════
@@ -180,6 +134,30 @@ def _build_transaction_context(conversation: dict, phone: str = "") -> str:
     
     
     return "".join(xml)
+
+
+def _was_link_recently_sent(history: list[dict], product_id: str) -> bool:
+    """
+    Vérifie si un lien de paiement a été envoyé dans les 3 derniers
+    messages assistant.
+    """
+    from webhook_app.database_conv import get_chunks_by_section
+    
+    # Récupérer l'URL checkout depuis la KB
+    chunks = get_chunks_by_section(product_id, "commercial") if product_id else []
+    checkout_url = ""
+    if chunks:
+        import re
+        match = re.search(r'https?://[^\s]+checkout[^\s]*', chunks[0].get("chunk_text", ""))
+        if match:
+            checkout_url = match.group(0)
+
+    if not checkout_url:
+        return False
+
+    assistant_msgs = [m for m in history if m.get("role") == "assistant"]
+    recent = assistant_msgs[-3:]   
+    return any(checkout_url in (m.get("content") or "") for m in recent)
 
 
 def _fetch_sale_data(sale_id: str) -> Optional[dict]:
@@ -382,39 +360,6 @@ class ContextBuilder:
         language   = conversation.get("language", "fr")
         state      = conversation.get("state", "new_prospect")
 
-        # ── Détection langue sur premier message ──────────────────
-        # Si langue pas encore définie ou par défaut fr,
-        # on tente de détecter sur chaque message
-
-        LANGUAGE_LOCK_THRESHOLD = 3
-
-        _history_count = len(history)
-        _lang_locked   = _history_count >= LANGUAGE_LOCK_THRESHOLD
-
-        if not _lang_locked:
-            # Moins de 3 messages — détection encore possible
-            detected = detect_language(user_message)
-            if detected != language and detected == "en":
-                
-                language = detected
-                try:
-                    from webhook_app.database_v21 import set_conversation_language
-                    conv_id_str = str(conversation.get("id", ""))
-                    if conv_id_str:
-                        set_conversation_language(conv_id_str, language)
-                        logger.info(
-                            "Langue mise à jour : %s → conv %s (msg %d/%d avant lock)",
-                            language, conv_id_str, _history_count, LANGUAGE_LOCK_THRESHOLD,
-                        )
-                except Exception as e:
-                    logger.warning("Mise à jour langue échouée : %s", e)
-        else:
-            # Langue verrouillée — ignorer toute détection
-            logger.debug(
-                "Langue verrouillée après %d messages : %s",
-                _history_count, language,
-            )
-
 
         # ── Query RAG enrichie 
 
@@ -460,7 +405,7 @@ class ContextBuilder:
 
         # ── 5. Prompt de base selon langue et ROUTAGE BINAIRE 
 
-        base_prompt = ab_prompt if ab_prompt else get_base_prompt(language, state=state)
+        base_prompt = ab_prompt if ab_prompt else get_base_prompt(state=state)
         static_prompt = base_prompt
 
         # Partie dynamique 
@@ -470,6 +415,8 @@ class ContextBuilder:
     
         if transaction_context:
             dynamic_parts.append(transaction_context)
+        if _was_link_recently_sent(history, product_id):
+            dynamic_parts.append("<lien_recent>oui</lien_recent>")
 
         #PHASE CDD Traitement des objections
         # Injectée si le client répond à une clarification 
@@ -488,14 +435,13 @@ class ContextBuilder:
                 dynamic_parts.append(f"\n{rag_context}\n")
 
             else:
-                if language == "en":
-                    dynamic_parts.append("\n[NOTE] No specific product information found.\n")
-                else:
-                    dynamic_parts.append("\n[NOTE] Aucune information produit trouvée.\n")
+
+                dynamic_parts.append("\n[NOTE] Aucune information produit trouvée.\n")
         else:
             # Toujours injecter la RAG si elle existe 
             if rag_context:
                 dynamic_parts.append(f"\n{rag_context}\n")
+        
 
 
         dynamic_prompt = "\n".join(dynamic_parts)
@@ -628,7 +574,6 @@ class ContextBuilder:
             "dynamic_context": dynamic_prompt,
             "messages":        llm_messages,
             "chunk_ids":       chunk_ids,
-            "language":        language,
         }
 
     def _load_frustration_keywords(self) -> list[str]:

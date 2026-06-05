@@ -29,33 +29,30 @@ inbound_bp = Blueprint("whatsapp_inbound", __name__)
 
 def _extract_message(payload: dict) -> dict | None:
     webhook_type = payload.get("typeWebhook")
-
-
+ 
     if webhook_type not in ("incomingMessageReceived", "outgoingMessageReceived"):
         logger.debug("Webhook ignoré — type : %s", webhook_type)
         return None
-
+ 
     sender_data  = payload.get("senderData") or {}
     message_data = payload.get("messageData") or {}
     text_message = message_data.get("textMessageData") or {}
-
+ 
     chat_id = sender_data.get("chatId") or ""
     sender  = sender_data.get("sender") or chat_id
-
+ 
     logger.info("DEBUG chatId=%s | sender=%s | type=%s", chat_id, sender, webhook_type)
-
-    # Ignorer les messages de groupe
+ 
     if "@g.us" in chat_id:
         return None
-
+ 
     phone_raw  = chat_id.replace("@c.us", "").strip()
     id_message = payload.get("idMessage") or ""
-
-    # ── Extraction du texte
-    extended = message_data.get("extendedTextMessageData") or {}
-    text     = text_message.get("textMessage") or extended.get("text") or ""
-
-    # ── Contexte du message 
+ 
+    # ── Extraction texte — textMessage + reply natif ──────────────────────
+    extended    = message_data.get("extendedTextMessageData") or {}
+    text        = text_message.get("textMessage") or extended.get("text") or ""
+ 
     quoted      = extended.get("quotedMessage") or {}
     quoted_text = (
         quoted.get("textMessage")
@@ -64,25 +61,52 @@ def _extract_message(payload: dict) -> dict | None:
     )
     if quoted_text.strip():
         text = f'[En réponse à : "{quoted_text.strip()[:100]}"]\n{text}'
-
-
-    if not text.strip():
+ 
+    # ── PATCH : Détection médias (image + document) ───────────────────────
+    media       = None
+    type_msg    = message_data.get("typeMessage", "")
+    file_data   = message_data.get("fileMessageData") or {}
+ 
+    if type_msg == "imageMessage" and file_data.get("downloadUrl"):
+        media = {
+            "type":      "image",
+            "url":       file_data.get("downloadUrl", ""),
+            "caption":   (file_data.get("caption") or "").strip(),
+            "filename":  file_data.get("fileName") or "image.jpg",
+            "mime_type": file_data.get("mimeType") or "image/jpeg",
+        }
+        # Si pas de texte → utiliser la caption comme texte de base
+        if not text and media["caption"]:
+            text = media["caption"]
+ 
+    elif type_msg == "documentMessage" and file_data.get("downloadUrl"):
+        media = {
+            "type":      "document",
+            "url":       file_data.get("downloadUrl", ""),
+            "caption":   (file_data.get("caption") or "").strip(),
+            "filename":  file_data.get("fileName") or "document",
+            "mime_type": file_data.get("mimeType") or "application/octet-stream",
+        }
+        if not text and media["caption"]:
+            text = media["caption"]
+    # ─────────────────────────────────────────────────────────────────────
+ 
+    # Ignorer si ni texte ni média
+    if not text.strip() and not media:
         return None
-
-    # Pour outgoing : is_outgoing=True —
+ 
     is_outgoing = webhook_type == "outgoingMessageReceived"
-
+ 
     return {
         "phone_raw":     phone_raw,
-        "phone":         chat_id,       
-        "sender":        sender,        
+        "phone":         chat_id,
+        "sender":        sender,
         "wa_message_id": id_message,
         "text":          text.strip(),
         "timestamp":     payload.get("timestamp"),
         "is_outgoing":   is_outgoing,
+        "media":         media,   # None si pas de média
     }
-
-
 
 
 # def _normalize_phone(phone_raw: str) -> str:
@@ -310,6 +334,7 @@ def whatsapp_inbound():
             phone=message["phone"],
             text=message["text"],
             wa_message_id=message["wa_message_id"],
+            media=message.get("media"),
         )
     except Exception as e:
         logger.exception("Erreur handle_incoming pour %s : %s", message["phone"], e)

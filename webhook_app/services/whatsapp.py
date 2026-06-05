@@ -21,10 +21,10 @@ class WhatsAppService:
 
         for rules in cls.COUNTRY_RULES.values():
             if digits.startswith(rules["code"] + rules["prefix"]) and rules["prefix"] == "0":
-                # CI : 2250XXXXXXXX (12 chiffres) → déjà normalisé, ne pas toucher
+            
                 expected_full_length = len(rules["code"]) + 1 + (rules["length"] - 2)
                 if len(digits) == 12 and rules["code"] == "225":
-                    break  # déjà au bon format
+                    break  
                 digits = rules["code"] + digits[len(rules["code"]) + 2:]
                 break
             elif digits.startswith(rules["code"] + rules["prefix"]) and rules["prefix"] == "6":
@@ -143,14 +143,78 @@ class WhatsAppService:
             logger.error(f"resolve_chat_id failed for {digits}: {e}")
         return None
 
+    @staticmethod
+    def calculate_delays(
+        incoming: str,
+        outgoing: str,
+        reading_wps: float = 6.0,
+        typing_wps: float = 0.30,
+    ) -> tuple[float, float]:
+        reading_words = max(1, len(incoming.split()))
+        typing_words  = max(1, len(outgoing.split()))
 
-    def send_message_direct(self, chatId: str, message: str, conv_id: str | None = None) -> bool:
+        reading_delay = min(max(1, reading_words / reading_wps), 6.0)
+        typing_delay  = min(max(1.0, typing_words  / typing_wps),  30.0)
+
+        return round(reading_delay, 1), round(typing_delay, 1)
+
+    def _send_typing_action(self, chat_id: str, typing_time_ms: int = 10000) -> None:
+        try:
+            url = (
+                f"https://api.green-api.com"
+                f"/waInstance{Config.INSTANCE_ID}"
+                f"/sendTyping/{Config.TOKEN}"
+            )
+            response = requests.post(
+                url,
+                json={"chatId": chat_id, "typingTime": typing_time_ms},
+                timeout=5,
+            )
+            logger.debug(
+                "sendTyping — status=%d | chatId=%s | typingTime=%dms",
+                response.status_code, chat_id, typing_time_ms,
+            )
+        except Exception as e:
+            logger.debug("sendTyping échoué (non bloquant) : %s", e)
+
+
+    def _send_typing_action_sustained(self, chat_id: str, duration: float, interval: float = 15.0) -> None:
+        """
+        Maintient l'indicateur 'en train d'écrire' actif pendant toute la durée.
+        Renvoie SendTyping toutes les `interval` secondes.
+        
+        interval : 10s
+        """
+        import time
+        elapsed = 0.0
+        while elapsed < duration:
+            remaining = duration - elapsed
+            
+            typing_time_ms = min(int(min(interval, remaining) * 1000), 20000)
+            self._send_typing_action(chat_id, typing_time_ms=typing_time_ms)
+            sleep_time = min(interval - 1.0, remaining)
+            time.sleep(sleep_time)
+            elapsed += sleep_time
+
+
+    def send_message_direct(
+        self,
+        chatId: str,
+        message: str,
+        conv_id: str | None = None,
+        reading_delay: float = 0.0,   
+        typing_delay:  float = 0.0,   
+        ) -> bool:
+
         """Envoi avec résolution LID automatique + retry sur timeout."""
         import time
 
         resolved = self.resolve_chat_id(chatId, conv_id=conv_id)
         final_id = resolved or chatId
-
+        if reading_delay > 0:
+            time.sleep(reading_delay)
+        if typing_delay > 0:
+            self._send_typing_action_sustained(final_id, duration=typing_delay)
         for attempt in range(3):
             try:
                 response = requests.post(
@@ -163,7 +227,7 @@ class WhatsAppService:
                 return True
 
             except requests.exceptions.Timeout:
-                wait = 2 ** (attempt +1)  # 2s, 4s, 8s
+                wait = 2 ** (attempt +1)  
                 logger.warning(
                     "Green API timeout (tentative %d/3) — retry dans %ds | chatId: %s",
                     attempt + 1, wait, final_id

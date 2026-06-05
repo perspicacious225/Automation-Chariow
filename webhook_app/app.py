@@ -1,8 +1,11 @@
 # webhook_app/app.py
 from flask import Flask, request, jsonify, redirect, url_for
 from flask_cors import CORS
-import json, os, logging, hmac, hashlib         
+import json, os, logging, hmac, hashlib   
+
+
 from webhook_app.admin.dashboard import dashboard_bp, dashboard_view
+from webhook_app.admin.dashboard_v2 import dashboard_v2_bp
 
 from webhook_app.database_pg import (
     Database,
@@ -26,7 +29,6 @@ from webhook_app.services.whatsapp_inbound import inbound_bp
 from webhook_app.conversation.manager import ConversationManager
 from webhook_app.services.whatsapp import WhatsAppService
 
-from webhook_app.admin.dashboard_v2 import dashboard_v2_bp
 
 from webhook_app import config
 
@@ -247,11 +249,11 @@ def create_app():
             from webhook_app.database_v21 import init_default_prompts
             from webhook_app.llm.prompts import (
                 BASE_SYSTEM_PROMPT,
-                BASE_SYSTEM_PROMPT_EN,
+               
                 BASE_PROMPT_VENDOR_FR,
-                BASE_PROMPT_VENDOR_EN,
+                
                 BASE_PROMPT_SUPPORT_FR,
-                BASE_PROMPT_SUPPORT_EN,
+               
             )
 
 
@@ -259,11 +261,7 @@ def create_app():
                 "base": {
                     "label": "Prompt système de base",
                     "content": BASE_SYSTEM_PROMPT,
-                },
-                "base_en": {
-                    "label": "Prompt système de base (EN)",
-                    "content": BASE_SYSTEM_PROMPT_EN,
-                },
+                }
             }
 
 
@@ -272,18 +270,12 @@ def create_app():
                 "label": "Prompt vendeur FR (compressé)",
                 "content": BASE_PROMPT_VENDOR_FR,
             }
-            default_prompts["base_vendor_en"] = {
-                "label": "Prompt vendeur EN (compressé)",
-                "content": BASE_PROMPT_VENDOR_EN,
-            }
+            
             default_prompts["base_support"] = {
                 "label": "Prompt support FR (compressé)",
                 "content": BASE_PROMPT_SUPPORT_FR,
             }
-            default_prompts["base_support_en"] = {
-                "label": "Prompt support EN (compressé)",
-                "content": BASE_PROMPT_SUPPORT_EN,
-            }
+ 
 
             init_default_prompts(default_prompts)
 
