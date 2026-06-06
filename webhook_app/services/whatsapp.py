@@ -211,10 +211,20 @@ class WhatsAppService:
 
         resolved = self.resolve_chat_id(chatId, conv_id=conv_id)
         final_id = resolved or chatId
+
+        import threading
+
         if reading_delay > 0:
             time.sleep(reading_delay)
+
         if typing_delay > 0:
-            self._send_typing_action_sustained(final_id, duration=typing_delay)
+            # Typing action en background
+            def _typing_bg():
+                self._send_typing_action_sustained(final_id, duration=typing_delay)
+
+            t = threading.Thread(target=_typing_bg, daemon=True)
+            t.start()
+            time.sleep(typing_delay)   
         for attempt in range(3):
             try:
                 response = requests.post(
