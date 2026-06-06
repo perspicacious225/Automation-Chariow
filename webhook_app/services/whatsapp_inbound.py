@@ -62,7 +62,7 @@ def _extract_message(payload: dict) -> dict | None:
     if quoted_text.strip():
         text = f'[En réponse à : "{quoted_text.strip()[:100]}"]\n{text}'
  
-    # ── PATCH : Détection médias (image + document) ───────────────────────
+    # Détection médias (image + document) ───────────────────────
     media       = None
     type_msg    = message_data.get("typeMessage", "")
     file_data   = message_data.get("fileMessageData") or {}
@@ -257,6 +257,28 @@ def _handle_admin_command(
     wa.send_to_admin(labels.get(tag, "Commande appliquée"))
     logger.info("Commande admin %s appliquée sur conv=%s", tag, conv_id)
 
+
+def _process_message_background(message: dict) -> None:
+    """
+    Traitement complet en background — LLM + délais + send WhatsApp.
+    Permet de retourner 200 immédiatement à Green API
+    sans attendre la fin du traitement.
+    """
+    try:
+        manager = ConversationManager()
+        manager.handle_incoming(
+            phone=message["phone"],
+            text=message["text"],
+            wa_message_id=message["wa_message_id"],
+            media=message.get("media"),
+            user_message_saved=True, 
+        )
+    except Exception as e:
+        logger.exception(
+            "Erreur background processing pour %s : %s",
+            message["phone"], e,
+        )
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ENDPOINT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -321,22 +343,52 @@ def whatsapp_inbound():
             logger.exception("Erreur commande admin : %s", e)
         return jsonify({"status": "ok"}), 200
 
-    # ── Ignorer les messages sortants non-commandes ──────────────
+    # ── Ignorer les messages sortants non-commandes
     # (réponses IA, relances) — évite les boucles
     if message.get("is_outgoing"):
         logger.debug("Message sortant non-commande ignoré : %s", message["text"][:40])
         return jsonify({"status": "ignored", "reason": "outgoing_non_command"}), 200
 
-    # ── Traitement normal — message client entrant ───────────────
-    try:
-        manager = ConversationManager()
-        manager.handle_incoming(
-            phone=message["phone"],
-            text=message["text"],
-            wa_message_id=message["wa_message_id"],
-            media=message.get("media"),
-        )
-    except Exception as e:
-        logger.exception("Erreur handle_incoming pour %s : %s", message["phone"], e)
+    # ── Traitement normal — message client entrant ────────────────
+    import threading
+    from webhook_app.database_conv import (
+        message_already_processed,
+        get_or_create_conversation,
+        save_message,
+    )
 
-    return jsonify({"status": "ok"}), 200
+    # Idempotence check dans le thread principal
+    if message["wa_message_id"] and message_already_processed(message["wa_message_id"]):
+        logger.info("Message déjà traité, ignoré : %s", message["wa_message_id"])
+        return jsonify({"status": "already_processed"}), 200
+
+    # Créer/récupérer la conversation
+    conversation = get_or_create_conversation(
+        phone=message["phone"],
+        initial_state="new_prospect",
+    )
+    conv_id = str(conversation["id"])
+
+    # Sauvegarder le message user AVANT le background thread
+    save_message(
+        conv_id,
+        role="user",
+        content=message["text"],
+        wa_message_id=message["wa_message_id"],
+        send_status="pending",
+    )
+
+    logger.info(
+        "Message sauvegardé — background thread lancé | phone=%s | wa_id=%s",
+        message["phone"], message["wa_message_id"],
+    )
+
+    # Lancer le traitement LLM + send en background
+    t = threading.Thread(
+        target=_process_message_background,
+        args=(message,),
+        daemon=True,
+    )
+    t.start()
+
+    return jsonify({"status": "ok"}), 200  

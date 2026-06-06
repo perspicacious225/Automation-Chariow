@@ -456,6 +456,7 @@ def save_message(
     *,
     wa_message_id: str | None = None,
     metadata: dict | None = None,
+    send_status = "pending"
 ) -> Optional[str]:
     """
     Sauvegarde un message dans l'historique.
@@ -466,9 +467,9 @@ def save_message(
         row = execute_with_retry(
             conn,
             """
-            INSERT INTO messages
-                (conversation_id, role, content, wa_message_id, metadata)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO messages (
+                conversation_id, role, content, wa_message_id, metadata, send_status)
+                VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (wa_message_id) DO NOTHING
             RETURNING id
             """,
@@ -483,6 +484,18 @@ def save_message(
         )
         return str(row["id"]) if row else None
 
+def update_message_send_status(wa_message_id: str, status: str) -> None:
+    """Met à jour le send_status du message user après envoi WhatsApp."""
+    with get_connection() as conn:
+        execute_with_retry(
+            conn,
+            """
+            UPDATE messages
+            SET send_status = %s
+            WHERE wa_message_id = %s AND role = 'user'
+            """,
+            (status, wa_message_id),
+        )
 
 def fetch_history(conv_id: str, limit: int = 30) -> list[dict]:
     with get_connection(readonly=True) as conn:
@@ -512,18 +525,23 @@ def fetch_history(conv_id: str, limit: int = 30) -> list[dict]:
             result.append(d)
         return result
 
-def message_already_exists(wa_message_id: str) -> bool:
-    """Vérifie si un message entrant a déjà été traité (idempotence)."""
-    if not wa_message_id:
-        return False
+def message_already_processed(wa_message_id: str) -> bool:
+    """
+    True UNIQUEMENT si message reçu ET réponse WhatsApp envoyée avec succès.
+    pending/failed → autorise le retry Green API.
+    """
     with get_connection(readonly=True) as conn:
         row = execute_with_retry(
             conn,
-            "SELECT 1 FROM messages WHERE wa_message_id = %s LIMIT 1",
+            """
+            SELECT send_status FROM messages
+            WHERE wa_message_id = %s AND role = 'user'
+            LIMIT 1
+            """,
             (wa_message_id,),
             fetch="one",
         )
-        return row is not None
+        return row is not None and row["send_status"] == "sent"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

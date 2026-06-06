@@ -31,7 +31,7 @@ from webhook_app.database_conv import (
     save_message,
     fetch_history,
     toggle_ai,
-    message_already_exists,
+    update_message_send_status,
     update_conversation_state,
     update_conversation_context,
 )
@@ -286,6 +286,7 @@ class ConversationManager:
         phone: str,
         text: str,
         wa_message_id: str,
+        user_message_saved: bool = False,
         dry_run: bool = False,
         media: dict | None = None, 
         ) -> str | None:
@@ -308,10 +309,11 @@ class ConversationManager:
         12. Transition d'état
         """
 
-        # 1. Idempotence
-        if wa_message_id and message_already_exists(wa_message_id):
-            logger.info("Message déjà traité, ignoré : %s", wa_message_id)
-            return
+        # 1. Idempotence        
+        if not user_message_saved:
+            if wa_message_id and message_already_exists(wa_message_id):
+                logger.info("Message déjà traité, ignoré : %s", wa_message_id)
+                return
 
         # 2. Blacklist
         if is_blacklisted(phone):
@@ -377,12 +379,8 @@ class ConversationManager:
             return   
 
         # 6. Sauvegarder le message utilisateur
-        save_message(
-            conv_id,
-            role="user",
-            content=text,
-            wa_message_id=wa_message_id,
-        )
+        if not user_message_saved:
+            save_message(conv_id, role="user", content=text, wa_message_id=wa_message_id)
 
         # ── Détection email pour vérification paiement ────────────────
         email_pattern = _re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
@@ -709,15 +707,25 @@ class ConversationManager:
 
 
         try:
-            _wa.send_message_direct(
+            sent = _wa.send_message_direct(
                 chatId=phone,
                 message=response_clean,
                 conv_id=conv_id,
                 reading_delay=reading_delay,
                 typing_delay=typing_delay,
             )
+
         except Exception as e:
             logger.exception("Erreur envoi WhatsApp pour %s : %s", phone, e)
+
+        try: 
+            update_message_send_status(
+                wa_message_id,
+                "sent" if sent else "failed",
+            )
+
+        except Exception as e:
+            logger.exception("Erreur de sauvegarde du message pour %s : %s", phone, e)
 
         # 11. Escalade automatique + log
         if escalade_requise:
