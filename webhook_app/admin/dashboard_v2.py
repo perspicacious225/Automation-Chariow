@@ -628,7 +628,10 @@ def stream_messages(conv_id: str):
 
     def generate():
         last_count = 0
-        while True:
+        start_time = time.time()
+        MAX_DURATION = 300  # 5 minutes max par connexion SSE
+
+        while time.time() - start_time < MAX_DURATION:
             try:
                 history = fetch_history(conv_id, limit=50)
                 if len(history) > last_count:
@@ -637,13 +640,15 @@ def stream_messages(conv_id: str):
                         _serialize_datetimes(msg)
                     data = json.dumps({"history": history})
                     yield f"data: {data}\n\n"
-                # Heartbeat toutes les 20s pour garder la connexion vivante
                 yield ": heartbeat\n\n"
             except Exception as e:
                 logger.warning("SSE stream erreur conv=%s : %s", conv_id, e)
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
                 break
             time.sleep(3)
+
+        # Client se reconnecte automatiquement (comportement SSE natif)
+        yield f"data: {json.dumps({'reconnect': True})}\n\n"
 
     return Response(
         stream_with_context(generate()),

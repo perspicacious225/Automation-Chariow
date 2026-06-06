@@ -1,1 +1,1 @@
-web: gunicorn webhook_app.app:app --worker-class gevent --workers 2 --timeout 120
+gunicorn webhook_app.app:app --worker-class gevent --workers 2 --timeout 0
