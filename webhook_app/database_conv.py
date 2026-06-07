@@ -463,6 +463,7 @@ def save_message(
     Retourne l'UUID du message créé, ou None si doublon (wa_message_id).
     role : 'user' | 'assistant' | 'system'
     """
+
     with get_connection() as conn:
         row = execute_with_retry(
             conn,
@@ -479,6 +480,7 @@ def save_message(
                 content,
                 wa_message_id,
                 Json(metadata or {}),
+                send_status,
             ),
             fetch="one",
         )
