@@ -378,17 +378,13 @@ def whatsapp_inbound():
         send_status="pending",
     )
 
-    logger.info(
-        "Message sauvegardé — background thread lancé | phone=%s | wa_id=%s",
-        message["phone"], message["wa_message_id"],
-    )
+    from webhook_app.database_conv import set_debounce
+    from webhook_app.config import Config
 
-    # Lancer le traitement LLM + send en background
-    t = threading.Thread(
-        target=_process_message_background,
-        args=(message,),
-        daemon=True,
+    set_debounce(conv_id, window_seconds=Config.DEBOUNCE_WINDOW_SECONDS)
+    logger.info(
+        "Message sauvegardé — debounce %ds | phone=%s | wa_id=%s",
+        Config.DEBOUNCE_WINDOW_SECONDS, message["phone"], message["wa_message_id"],
     )
-    t.start()
 
     return jsonify({"status": "ok"}), 200  

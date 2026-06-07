@@ -101,7 +101,7 @@ def _process_pending_emails(email_service):
         time.sleep(PENDING_EMAIL_THROTTLE_SECONDS)
 
 
-# ── Mots-clés SSL/connexion récupérables ──────────────────────────────────────
+# ── Mots-clés SSL/connexion récupérables 
 _SSL_KEYWORDS = ("ssl syscall", "eof detected", "ssl connection", "connection reset")
 
 
@@ -187,6 +187,72 @@ def start_scheduler(send_func: Callable[[Sale, str], bool], email_service=None):
 
             time.sleep(30)
 
-    th = threading.Thread(target=worker, name="relance-scheduler", daemon=True)
+    def debounce_worker():
+        while True:
+            try:
+                _process_debounced_conversations()
+            except psycopg2.OperationalError as e:
+                logger.warning("[DEBOUNCE] Erreur DB transitoire : %s", e)
+            except Exception:
+                logger.exception("[DEBOUNCE] Unhandled error")
+            time.sleep(2)  
+
+    th  = threading.Thread(target=worker, name="relance-scheduler", daemon=True)
+    dth = threading.Thread(target=debounce_worker, name="debounce-watcher",  daemon=True)
+
     th.start()
+    dth.start()
+
+   
     return th
+
+def _process_debounced_conversations() -> None:
+    """
+    Traite les conversations dont le debounce a expiré.
+    Agrège tous les messages pending et déclenche le LLM une seule fois.
+    """
+    from webhook_app.database_conv import (
+        fetch_expired_debounce,
+        claim_debounce,
+        fetch_pending_user_messages,
+    )
+    from webhook_app.conversation.manager import ConversationManager
+
+    expired = fetch_expired_debounce(limit=10)
+    if not expired:
+        return
+
+    for conv in expired:
+        conv_id  = str(conv["id"])
+        phone    = conv["phone"]
+
+        # Claim atomique — évite double traitement (multi-workers)
+        if not claim_debounce(conv_id):
+            logger.debug("[DEBOUNCE] Claim raté (déjà traité) — conv=%s", conv_id)
+            continue
+
+        pending_msgs = fetch_pending_user_messages(conv_id)
+        if not pending_msgs:
+            continue
+
+        # Agréger les messages dans l'ordre chronologique
+        aggregated_text = "\n".join(
+            m["content"] for m in pending_msgs if (m["content"] or "").strip()
+        )
+        last_wa_id = pending_msgs[-1]["wa_message_id"]
+
+        logger.info(
+            "[DEBOUNCE] Traitement %d message(s) agrégé(s) — conv=%s | phone=%s",
+            len(pending_msgs), conv_id, phone,
+        )
+
+        try:
+            manager = ConversationManager()
+            manager.handle_incoming(
+                phone=phone,
+                text=aggregated_text,
+                wa_message_id=last_wa_id,
+                user_message_saved=True,
+            )
+        except Exception:
+            logger.exception("[DEBOUNCE][ERR] conv=%s phone=%s", conv_id, phone)

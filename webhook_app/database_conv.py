@@ -738,6 +738,78 @@ def list_conversations_with_last_message(
     with get_connection(readonly=True) as conn:
         rows = execute_with_retry(conn, sql, params, fetch="all") or []
         return [dict(r) for r in rows]
+    
+
+def set_debounce(conv_id: str, window_seconds: int = 8) -> None:
+    """Définit ou reporte le debounce_until pour cette conversation."""
+    with get_connection() as conn:
+        execute_with_retry(
+            conn,
+            """
+            UPDATE conversations
+            SET debounce_until = NOW() + (%s * INTERVAL '1 second')
+            WHERE id = %s
+            """,
+            (window_seconds, conv_id),
+        )
+
+
+def fetch_expired_debounce(limit: int = 10) -> list[dict]:
+    """Conversations dont le debounce a expiré avec des messages pending."""
+    with get_connection(readonly=True) as conn:
+        return execute_with_retry(
+            conn,
+            """
+            SELECT DISTINCT c.id, c.phone, c.ai_active
+            FROM conversations c
+            INNER JOIN messages m ON m.conversation_id = c.id
+            WHERE c.debounce_until IS NOT NULL
+              AND c.debounce_until <= NOW()
+              AND m.role = 'user'
+              AND m.send_status = 'pending'
+            LIMIT %s
+            """,
+            (limit,),
+            fetch="all",
+        ) or []
+
+
+def claim_debounce(conv_id: str) -> bool:
+    """
+    Claim atomique — reset debounce_until à NULL.
+    Retourne True si claim réussi (évite double traitement multi-workers).
+    """
+    with get_connection() as conn:
+        rowcount = execute_with_retry(
+            conn,
+            """
+            UPDATE conversations
+            SET debounce_until = NULL
+            WHERE id = %s
+              AND debounce_until IS NOT NULL
+              AND debounce_until <= NOW()
+            """,
+            (conv_id,),
+        )
+        return bool(rowcount and rowcount > 0)
+
+
+def fetch_pending_user_messages(conv_id: str) -> list[dict]:
+    """Messages user avec send_status='pending' dans l'ordre chronologique."""
+    with get_connection(readonly=True) as conn:
+        return execute_with_retry(
+            conn,
+            """
+            SELECT id, content, wa_message_id, timestamp
+            FROM messages
+            WHERE conversation_id = %s
+            AND role = 'user'
+            AND send_status = 'pending'
+            ORDER BY timestamp ASC NULLS LAST, id ASC
+            """,
+            (conv_id,),
+            fetch="all",
+        ) or []
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INIT — point d'entrée appelé au démarrage de l'app

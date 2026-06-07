@@ -103,6 +103,8 @@ class Config:
     GREEN_API_WEBHOOK_SECRET = os.getenv("GREEN_API_WEBHOOK_SECRET")
     ADMIN_PHONE = os.getenv("ADMIN_PHONE")
 
+    DEBOUNCE_WINDOW_SECONDS = int(os.getenv("DEBOUNCE_WINDOW_SECONDS", "10"))
+
 
 # ===== Strategy parameters =====
 # RELANCE_DELAYS = {
