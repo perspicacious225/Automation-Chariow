@@ -34,6 +34,8 @@ from webhook_app.database_conv import (
     update_message_send_status,
     update_conversation_state,
     update_conversation_context,
+    save_previous_state,
+    message_already_processed
 )
 from webhook_app.database_v21 import (
     is_blacklisted,
@@ -311,7 +313,7 @@ class ConversationManager:
 
         # 1. Idempotence        
         if not user_message_saved:
-            if wa_message_id and message_already_exists(wa_message_id):
+            if wa_message_id and message_already_processed(wa_message_id):
                 logger.info("Message déjà traité, ignoré : %s", wa_message_id)
                 return
 
@@ -746,6 +748,16 @@ class ConversationManager:
         # 12. ── Transition d'état
  
         if output.state != current_state:
+
+            # ── PATCH : sauvegarder previous_state avant escalation ──────────
+            if output.state == "escalation":
+                save_previous_state(conv_id, current_state)
+                logger.info(
+                    "Escalade — previous_state sauvegardé : %s | conv=%s",
+                    current_state, conv_id,
+                )
+            # ─────────────────────────────────────────────────────────────────
+
             update_conversation_state(conv_id, output.state)
             logger.info(
                 "Transition : %s → %s (conversation %s)",

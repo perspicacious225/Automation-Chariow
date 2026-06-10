@@ -17,6 +17,8 @@ from webhook_app.config import Config
 from webhook_app.conversation.manager import ConversationManager
 from webhook_app.services.whatsapp import WhatsAppService
 
+from webhook_app.database_conv import get_previous_state
+
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +233,17 @@ def _handle_admin_command(
 
     # Appliquer l'action
     toggle_ai(conv_id, action["ai_active"])
-    if action["state"]:
+
+    # Si réactivation (REPRISE/RESOLU) et state=escalation → restaurer previous_state
+    if action["ai_active"] and conv["state"] == "escalation":
+        prev = get_previous_state(conv_id)  # depuis la DB
+        restored_state = prev or "pre_sale"  # fallback sécurisé
+        update_conversation_state(conv_id, restored_state)
+        logger.info(
+            "REPRISE — state escalation → restauré à %s | conv=%s",
+            restored_state, conv_id,
+        )
+    elif action["state"]:
         update_conversation_state(conv_id, action["state"])
 
     # ── Résoudre l'escalade dans l'historique ───────────────

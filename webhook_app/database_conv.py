@@ -234,6 +234,27 @@ def get_conversation_by_id(conv_id: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+
+
+def save_previous_state(conv_id: str, state: str) -> None:
+    with get_connection() as conn:
+        execute_with_retry(
+            conn,
+            "UPDATE conversations SET previous_state = %s WHERE id = %s",
+            (state, conv_id),
+        )
+
+def get_previous_state(conv_id: str) -> str | None:
+    with get_connection(readonly=True) as conn:
+        row = execute_with_retry(
+            conn,
+            "SELECT previous_state FROM conversations WHERE id = %s",
+            (conv_id,),
+            fetch="one",
+        )
+        return row["previous_state"] if row else None
+    
+
 def update_conversation_state(conv_id: str, new_state: str) -> bool:
     """
     Met à jour l'état d'une conversation.
@@ -249,6 +270,8 @@ def update_conversation_state(conv_id: str, new_state: str) -> bool:
             (new_state, conv_id),
         )
         return (rc or 0) > 0
+
+
 
 
 def update_conversation_context(
@@ -485,6 +508,9 @@ def save_message(
             fetch="one",
         )
         return str(row["id"]) if row else None
+    
+
+
 
 def update_message_send_status(wa_message_id: str, status: str) -> None:
     """Met à jour le send_status du message user après envoi WhatsApp."""
