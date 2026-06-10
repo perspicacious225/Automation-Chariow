@@ -220,6 +220,7 @@ def create_app():
                     if _phone_norm:
                         ConversationManager().on_payment_event(
                             phone=_phone_norm,
+                            country=sale.customer_country or "CI",
                             event_type=payload.get("event", ""),
                             sale_id=sale.id,
                             product_id=sale.product_id,

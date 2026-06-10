@@ -32,3 +32,4 @@ python-docx
 filelock
 tiktoken
 protobuf
+phonenumbers

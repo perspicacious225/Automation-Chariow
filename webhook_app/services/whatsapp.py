@@ -6,48 +6,64 @@ from webhook_app.config import Config
 
 logger = logging.getLogger(__name__)
 
+
+import phonenumbers
 class WhatsAppService:
-    COUNTRY_RULES = {
-        "CI": {"code": "225", "prefix": "0", "length": 10},
-        "BJ": {"code": "229", "prefix": "0", "length": 10},
-        "CM": {"code": "237", "prefix": "6", "length": 9}
-    }
+
 
     @classmethod
-    def _normalize_digits(cls, phone: str) -> Optional[str]:
-        digits = re.sub(r"\D", "", phone or "")
-        if digits.startswith("00"):
-            digits = digits[2:]
+    def _normalize_digits(cls, phone: str, country: str = "CI") -> Optional[str]:
+        """
+        Normalise vers E.164 sans le + via libphonenumber (Google).
+        Gère automatiquement tous les formats et changements pays.
+        """
+        if not phone:
+            return None
 
-        for rules in cls.COUNTRY_RULES.values():
-            if digits.startswith(rules["code"] + rules["prefix"]) and rules["prefix"] == "0":
-            
-                expected_full_length = len(rules["code"]) + 1 + (rules["length"] - 2)
-                if len(digits) == 12 and rules["code"] == "225":
-                    break  
-                digits = rules["code"] + digits[len(rules["code"]) + 2:]
-                break
-            elif digits.startswith(rules["code"] + rules["prefix"]) and rules["prefix"] == "6":
-                digits = rules["code"] + digits[len(rules["code"]) + 1:]
-                break
-            elif len(digits) == rules["length"] and digits.startswith(rules["prefix"]):
-                digits = rules["code"] + digits[2:]
-                break
+        # Nettoyer suffixes WhatsApp et caractères non-numériques
+        clean = re.sub(r'@.*$', '', phone).strip()
+        clean = re.sub(r'\D', '', clean)
+        if not clean:
+            return None
 
-        return digits or None
+        #1 — numéro international
+        try:
+            parsed = phonenumbers.parse(f"+{clean}")
+            if phonenumbers.is_valid_number(parsed):
+                return phonenumbers.format_number(
+                    parsed, phonenumbers.PhoneNumberFormat.E164
+                ).lstrip("+")
+        except phonenumbers.NumberParseException:
+            pass
+
+        # 2 — numéro local + country_code connu
+    
+        try:
+            parsed = phonenumbers.parse(clean, country)
+            if phonenumbers.is_valid_number(parsed):
+                return phonenumbers.format_number(
+                    parsed, phonenumbers.PhoneNumberFormat.E164
+                ).lstrip("+")
+        except Exception:
+            pass
+
+
+        # retourner les chiffres bruts (mieux que None)
+        logger.warning("normalize_digits — numéro non reconnu : %s", phone)
+        return clean or None
     
     @classmethod
-    def normalize_for_dedupe(cls, phone: str) -> Optional[str]:
+    def normalize_for_dedupe(cls, phone: str, country: str = "CI") -> Optional[str]:
         """
         Version pour la DÉDUPLICATION: retourne uniquement les chiffres
         avec indicatif (ex: '22507xxxxxxx'), SANS '@c.us'.
         """
-        return cls._normalize_digits(phone)
+        return cls._normalize_digits(phone, country=country)
 
 
     @classmethod
-    def normalize_phone(cls, phone: str) -> Optional[str]:
-        digits = cls._normalize_digits(phone)
+    def normalize_phone(cls, phone: str, country: str = "CI") -> Optional[str]:
+        digits = cls._normalize_digits(phone, country=country)
         return f"{digits}@c.us" if digits else None
 
     def send_message(self, phone: str, message: str) -> bool:
